@@ -4,7 +4,7 @@ Scenes are ``.tnz`` files that live at the workspace root. Level import is
 *additive*: if the scene already exists it is loaded first, so several levels
 can be layered into one scene across multiple calls.
 
-Two OpenToonz quirks shape this module:
+Three OpenToonz quirks shape this module:
 
 * **Scene settings are not scriptable.** ``scene.setCameraSize``,
   ``setFrameCount`` and friends do not exist in the scripting API. Camera
@@ -13,6 +13,12 @@ Two OpenToonz quirks shape this module:
   round-trip preserves those edits (verified), so ordering is not delicate.
 * **Nothing can be deleted.** There is no ``removeLevel``/``clearCell``, so
   re-importing a level *reuses* it rather than replacing it.
+* **There is no camera API either.** The camera is a stage object — a
+  ``<pegbar id="Camera1">`` inside the xsheet's ``<pegbars>`` — and its motion
+  lives in that element's channels, so :func:`camera_move` patches those
+  directly. OpenToonz reads, renders and re-saves them (verified end to end),
+  which makes camera moves non-destructive: they stay editable in OpenToonz's
+  Function Editor.
 """
 
 from __future__ import annotations
@@ -151,6 +157,7 @@ def _read_int(value: object, label: str) -> int:
     return number
 
 
+@workspace_mod.locked
 def set_scene_settings(
     context: Context,
     workspace: str,
@@ -211,6 +218,7 @@ def set_scene_settings(
     return SceneSettings(width=new_width, height=new_height, camera_size=camera_size, fps=current_fps, changed=changed)
 
 
+@workspace_mod.locked
 def scene_new(
     context: Context,
     workspace: str,
@@ -246,12 +254,241 @@ def scene_new(
     return set_scene_settings(context, workspace, scene, width=width, height=height, fps=fps)
 
 
+# -- camera moves (patched into the .tnz XML) ---------------------------------
+#: Stage-object channels used for camera work. ``x``/``y`` hold the camera's
+#: position, ``sc`` its uniform scale and ``rot`` its rotation.
+CAMERA_CHANNELS = ("x", "y", "sc", "rot")
+
+#: A channel value that means "leave the camera alone"; such channels are not
+#: written at all, so a pan-only move does not also freeze the zoom.
+_NEUTRAL_CHANNEL = {"x": 0.0, "y": 0.0, "sc": 1.0, "rot": 0.0}
+
+#: Keyframe interpolation code for a linear segment (see TDoubleKeyframe::Type).
+_LINEAR = "L"
+
+#: The default camera's stage object. Scenes have one camera; OpenToonz names it
+#: ``Camera1`` in the xsheet's pegbar list.
+DEFAULT_CAMERA = "Camera1"
+
+
+def _px_per_inch(text: str) -> float:
+    """Pixels per scene unit at the scene's current resolution.
+
+    Camera position is measured in the scene's physical units (inches, 120 dpi
+    by convention — see :data:`IMAGE_DPI`): a 1.0 move pans across
+    ``cameraRes.x / cameraSize.x`` pixels. Read from the file rather than
+    assuming 120, so a hand-edited scene cannot silently shift every move.
+    """
+    res = _CURRENT_RES_RE.search(text)
+    size = _CURRENT_SIZE_RE.search(text)
+    if res and size:
+        width_inches = float(size.group(1))
+        if width_inches > 0:
+            scale = float(res.group(1)) / width_inches
+            if scale > 0:
+                return scale
+    return IMAGE_DPI
+
+
+@dataclass(frozen=True)
+class CameraKey:
+    """One camera keyframe, in the units the tool exposes."""
+
+    frame: int
+    x: float = 0.0
+    y: float = 0.0
+    zoom: float = 1.0
+    rotation: float = 0.0
+
+
+@dataclass
+class CameraMove:
+    """Outcome of :func:`camera_move`."""
+
+    keyframes: list[CameraKey]
+    channels: list[str]
+    px_per_inch: float
+    first_frame: int
+    last_frame: int
+
+
+def _camera_number(item: dict, index: int, name: str, default: float) -> float:
+    value = item.get(name, default)
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise OpentoonzMCPError(f"keyframe {index}: '{name}' must be a number, got {value!r}") from exc
+
+
+def _normalise_camera_keys(raw: object) -> list[CameraKey]:
+    """Validate caller keyframes, sort them, and reject anything ambiguous."""
+    if isinstance(raw, (CameraKey, dict)):
+        raw = [raw]
+    if not isinstance(raw, (list, tuple)) or not raw:
+        raise OpentoonzMCPError("keyframes must be a non-empty list of objects like {'frame': 1, 'x': 0}.")
+
+    keys: list[CameraKey] = []
+    for index, item in enumerate(raw):
+        if isinstance(item, CameraKey):
+            keys.append(item)
+            continue
+        if not isinstance(item, dict):
+            raise OpentoonzMCPError(f"keyframe {index} must be an object, got {item!r}")
+        if "frame" not in item:
+            raise OpentoonzMCPError(f"keyframe {index} needs a 'frame' (a 1-based shot frame, as in render_frame)")
+        frame = _camera_number(item, index, "frame", 0.0)
+        if frame != int(frame) or int(frame) < 1:
+            raise OpentoonzMCPError(f"keyframe {index}: frame must be a whole number >= 1, got {item['frame']!r}")
+        zoom = _camera_number(item, index, "zoom", 1.0)
+        if zoom <= 0:
+            raise OpentoonzMCPError(f"keyframe {index}: zoom must be greater than 0 (1 = unchanged), got {zoom}")
+        keys.append(
+            CameraKey(
+                frame=int(frame),
+                x=_camera_number(item, index, "x", 0.0),
+                y=_camera_number(item, index, "y", 0.0),
+                zoom=zoom,
+                rotation=_camera_number(item, index, "rotation", 0.0),
+            )
+        )
+
+    keys.sort(key=lambda key: key.frame)
+    duplicates = {a.frame for a, b in zip(keys, keys[1:], strict=False) if a.frame == b.frame}
+    if duplicates:
+        raise OpentoonzMCPError(f"Duplicate camera keyframe frames: {sorted(duplicates)}")
+    return keys
+
+
+def _camera_channels(keys: list[CameraKey], px_per_inch: float) -> dict[str, list[tuple[int, float]]]:
+    """Convert tool units to scene channels, dropping channels left at neutral.
+
+    ``x``/``y`` become the camera's physical position (pixels / ``px_per_inch``)
+    and ``zoom`` becomes a scale, which is the inverse: OpenToonz renders the
+    camera's view, so halving the scale doubles the artwork on screen.
+    """
+    converted = {
+        "x": [(key.frame, key.x / px_per_inch) for key in keys],
+        "y": [(key.frame, key.y / px_per_inch) for key in keys],
+        "sc": [(key.frame, 1.0 / key.zoom) for key in keys],
+        "rot": [(key.frame, key.rotation) for key in keys],
+    }
+    # Channels are 1-based here (the tool's frame numbering); the xsheet is
+    # 0-based, so shift once, at the point of writing.
+    shifted = {tag: [(frame - 1, value) for frame, value in rows] for tag, rows in converted.items()}
+    return {tag: rows for tag, rows in shifted.items() if any(value != _NEUTRAL_CHANNEL[tag] for _, value in rows)}
+
+
+def _channel_xml(tag: str, rows: list[tuple[int, float]], indent: str) -> str:
+    """One animated channel, laid out the way OpenToonz writes it."""
+    lines = [
+        f"{indent}<{tag}>",
+        f"{indent}  <default>",
+        f"{indent}    {_format_length(rows[0][1])} ",
+        f"{indent}  </default>",
+        f"{indent}  <keyframes>",
+    ]
+    for frame, value in rows:
+        lines += [
+            f"{indent}    <{_LINEAR}>",
+            f"{indent}      {_format_length(frame)} {_format_length(value)} ",
+            f"{indent}    </{_LINEAR}>",
+        ]
+    lines += [f"{indent}  </keyframes>", f"{indent}</{tag}>"]
+    return "\n".join(lines)
+
+
+def _patch_pegbar(
+    text: str,
+    pegbar_id: str,
+    channels: dict[str, list[tuple[int, float]]],
+    clear: tuple[str, ...] = (),
+) -> str:
+    """Rewrite ``channels`` inside a stage object, leaving everything else alone.
+
+    ``clear`` names channels to remove even when they are not being written.
+    Camera keyframes are complete poses, so a move that leaves ``zoom`` at
+    neutral must also *drop* a previous zoom rather than silently keeping it.
+    """
+    opener = re.compile(rf'^([ \t]*)<pegbar\b[^>]*\bid="{re.escape(pegbar_id)}"[^>]*>', re.MULTILINE)
+    match = opener.search(text)
+    if match is None:
+        raise OpentoonzMCPError(
+            f'No <pegbar id="{pegbar_id}"> in the scene. Camera animation needs a scene '
+            "created by OpenToonz (opentoonz_scene_new)."
+        )
+    start, indent = match.end(), match.group(1) + "  "
+    end = text.index("</pegbar>", start)
+    block = text[start:end]
+
+    for tag in sorted({*channels, *clear}):
+        # Strip a previous version of this channel, first as whole lines (a
+        # static <default> block) and failing that inline.
+        stripped = re.sub(rf"(?m)^[ \t]*<{tag}>[\s\S]*?</{tag}>[ \t]*\n", "", block)
+        block = stripped if stripped != block else re.sub(rf"<{tag}>[\s\S]*?</{tag}>", "", block)
+
+    anchor = block.find("<nodePos>")
+    if anchor == -1:  # pragma: no cover - nodePos is unconditional in OpenToonz saves
+        raise OpentoonzMCPError("Unexpected scene layout: the camera stage object has no <nodePos>.")
+    inserted = "".join(_channel_xml(tag, rows, indent) + "\n" for tag, rows in channels.items())
+    line_start = block.rfind("\n", 0, anchor) + 1
+    block = block[:line_start] + inserted + block[line_start:]
+    return text[:start] + block + text[end:]
+
+
+@workspace_mod.locked
+def camera_move(
+    context: Context,
+    workspace: str,
+    scene: str,
+    keyframes: list[dict],
+    *,
+    camera: str = DEFAULT_CAMERA,
+) -> CameraMove:
+    """Move the scene's camera over time: pan, zoom, and rotate.
+
+    Each keyframe is ``{"frame": int, "x": px, "y": px, "zoom": factor,
+    "rotation": degrees}``; only ``frame`` is required. ``frame`` is a 1-based
+    shot frame (the same numbering as ``render_frame``). ``x``/``y`` are the
+    camera's position in scene pixels (+x pans the view right, +y up, so the art
+    moves the other way), ``zoom`` is a magnification (2 = twice as large) and
+    ``rotation`` is in degrees, clockwise on screen, about the frame centre.
+    OpenToonz interpolates linearly between keyframes.
+
+    The move is written into the ``.tnz`` as the camera stage object's channels,
+    so it survives later edits and stays editable in OpenToonz. Only channels
+    that actually differ from neutral are written.
+    """
+    ws = workspace_mod.require(context, workspace)
+    scene_path = ws.scene_path(scene)
+    if not scene_path.is_file():
+        raise OpentoonzMCPError(f"Scene not found: {scene_path}")
+
+    keys = _normalise_camera_keys(keyframes)
+    text = scene_path.read_text(encoding="utf-8")
+    px_per_inch = _px_per_inch(text)
+    channels = _camera_channels(keys, px_per_inch)
+    if not channels:
+        raise OpentoonzMCPError(
+            "Nothing to animate: every keyframe is at the camera's neutral position, "
+            "zoom 1 and rotation 0. Set x, y, zoom, or rotation on at least one keyframe."
+        )
+    scene_path.write_text(_patch_pegbar(text, camera, channels, clear=CAMERA_CHANNELS), encoding="utf-8")
+    return CameraMove(
+        keyframes=keys,
+        channels=[tag for tag in CAMERA_CHANNELS if tag in channels],
+        px_per_inch=px_per_inch,
+        first_frame=keys[0].frame,
+        last_frame=keys[-1].frame,
+    )
+
+
 # -- level import -------------------------------------------------------------
 def _numbered_drawings(level_name: str) -> re.Pattern[str]:
     """Matches exactly the frames belonging to ``level_name`` (not 'balloon')."""
     return re.compile(rf"^{re.escape(level_name)}\.\d{{4}}\.png$")
 
 
+@workspace_mod.locked
 def import_level(
     context: Context,
     workspace: str,
@@ -355,6 +592,7 @@ def _marker_int(stdout: str, prefix: str) -> int:
 
 
 # -- inspection ---------------------------------------------------------------
+@workspace_mod.locked
 def scene_info(context: Context, workspace: str, scene: str, max_rows: int = DEFAULT_MAX_ROWS) -> SceneInfo:
     """Read frame/column counts, levels, and the cell map of a saved scene.
 
@@ -420,6 +658,7 @@ def parse_scene_info(stdout: str) -> SceneInfo:
     )
 
 
+@workspace_mod.locked
 def set_cells(context: Context, workspace: str, scene: str, placements: list[dict]) -> ScriptResult:
     """Place/replace cells on a saved scene's xsheet."""
     ws = workspace_mod.require(context, workspace)
@@ -480,6 +719,7 @@ def expand_exposures(exposures: list[int], drawing_count: int) -> list[tuple[int
     return placements
 
 
+@workspace_mod.locked
 def set_exposure(
     context: Context,
     workspace: str,

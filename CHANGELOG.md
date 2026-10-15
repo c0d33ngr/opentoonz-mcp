@@ -6,6 +6,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-15
+
+Camera moves, output polish, and hardening.
+
+### Added
+- **`opentoonz_camera_move`** — animate the camera: pan, zoom, and rotate over
+  the shot, `[{"frame": 1, "zoom": 1}, {"frame": 48, "zoom": 1.4}]`. The
+  scripting API has no camera at all (the camera is a *stage object* inside the
+  `.tnz`), so keyframes are written into the camera's own channels. OpenToonz
+  reads, renders *and re-saves* them, so the move behaves like a real camera move
+  and stays editable in the GUI's Function Editor instead of being baked into the
+  artwork. Position is in scene pixels, `zoom` is a magnification, and
+  `rotation` is in degrees; channels left at neutral are cleared, so a later call
+  fully redefines the camera rather than merging with an earlier one.
+- **`opentoonz_render_gif`** — render a scene to a looping GIF with ffmpeg's
+  `palettegen`/`paletteuse` (per-clip palette, so gradients do not band). `fps`,
+  `max_width`, and `colors` are configurable.
+- **`opentoonz_render_frame(max_width=...)`** — downscale the returned preview in
+  place, so looking at a 1080p scene costs far fewer image tokens. The reply
+  reports the size (`(960x540, downscaled from 1920x1080)`). Only the preview is
+  affected; `opentoonz_render` and `opentoonz_render_video` frames are untouched.
+- **`opentoonz_render_video(audio=...)`** — mux an external soundtrack
+  (`-c:a aac -shortest`). OpenToonz's own audio columns are unreachable from the
+  scripting API, so audio always comes from a file.
+- **Per-workspace locking.** Every scene and render operation now runs under a
+  re-entrant `flock` on `<workspace>/.lock`, so two agents (or processes) sharing
+  a workspace can no longer silently drop each other's changes. A busy workspace
+  waits, then fails with a clear message rather than hanging.
+- `opentoonz_list_workspaces` reports each workspace's size on disk (plus GIFs).
+- `scripts/probe_camera.py` — a re-runnable probe that re-establishes how the
+  camera is stored and what each channel does, for future OpenToonz upgrades.
+- Faked-subprocess unit tests for `bridge.py` and `render.py` (147 unit + 19 e2e).
+
+### Changed
+- **The saved script succeeds or fails on its own terms.** A missing OpenToonz or
+  `tcomposer` binary now raises a message naming `OPENTOONZ_RUNTIME` instead of
+  surfacing a bare `FileNotFoundError`, and a missing audio file is reported
+  before rendering rather than after.
+- `docs/runtime-notes.md` records the camera and audio findings (facts 27–30).
+
+### Fixed
+- **Serialised camera calls no longer accumulate channels.** Writing only the
+  channels of the latest call left an earlier move switched on — a pan followed by
+  a zoom kept both — which was found by rendering and measuring the result.
+
 ## [0.2.0] - 2026-10-15
 
 Scene resolution control, exposure timing, and image compositing — plus three

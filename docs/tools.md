@@ -21,7 +21,8 @@ Idempotent — calling it again reuses the workspace. Names may be nested
 (`series/ep1`) but can never escape the workspaces root.
 
 ### `opentoonz_list_workspaces() -> str`
-Lists each workspace with its scenes and rendered videos.
+Lists each workspace with its scenes, videos, GIFs, rendered frame count, and
+total size on disk (the render folder is usually the bulk of it).
 
 ## Scenes
 
@@ -84,6 +85,41 @@ Every row of a hold gets its own cell: an empty xsheet row renders nothing, so
 contiguous from `start_row`, and the scene's frame count follows what is placed.
 The level must already be in the scene.
 
+## Camera
+
+### `opentoonz_camera_move(workspace, scene, keyframes) -> str`
+Animates the scene's camera — pan, zoom, and rotate over time.
+
+`keyframes` is a list of `{"frame": int, "x": px, "y": px, "zoom": factor,
+"rotation": degrees}`. Only `frame` is required; the rest default to no movement
+(`x=0`, `y=0`, `zoom=1`, `rotation=0`). Keyframes may be given in any order.
+
+- `frame` is a **1-based shot frame**, the same numbering as
+  `opentoonz_render_frame`. Keyframes map to xsheet rows, so the first frame of
+  the shot (`1`) is the row where you placed the first cell.
+- `x`/`y` are the camera's position in **scene pixels**: `+x` pans the view right
+  and `+y` pans it up, so the artwork moves the opposite way. One unit is
+  `cameraRes.x / cameraSize.x` pixels — 120 px at the resolution
+  `opentoonz_set_scene_settings` keeps.
+- `zoom` is a **magnification**: `2` renders the artwork twice as large. Because
+  this is a physical camera move, a pan's on-screen size is multiplied by the
+  zoom.
+- `rotation` is in **degrees, clockwise on screen**, about the frame centre.
+- OpenToonz interpolates **linearly** between keyframes. For easing, open the
+  scene in OpenToonz and edit the curve in the Function Editor.
+- **Replaces, not merges:** each call defines the whole camera, so channels left
+  at neutral are cleared. Calling it again with only `zoom` drops an earlier pan
+  rather than silently keeping both.
+
+```json
+[{"frame": 1, "zoom": 1.0}, {"frame": 48, "zoom": 1.4, "x": 60}]
+```
+
+**Why it patches XML:** the scripting API has no camera at all — the camera is a
+*stage object* (`<pegbar id="Camera1">`) whose channels live in the `.tnz`. The
+move is written there, so it renders like a real camera move and stays editable
+in OpenToonz rather than being baked into the artwork.
+
 ## Drawing
 
 Draws RGBA frames with a small, intentional PIL subset — for agents that have no
@@ -138,15 +174,32 @@ Example:
 
 ## Rendering
 
-### `opentoonz_render_frame(workspace, scene, frame=1, out_name="look") -> str`
+### `opentoonz_render_frame(workspace, scene, frame=1, out_name="look", max_width=None) -> str`
 Renders a single frame to a PNG — the agent's "look" at its work.
+
+`max_width` downscales the returned PNG **in place** so looking at a large scene
+costs fewer image tokens; the reply reports the size, e.g. `(960x540, downscaled
+from 1920x1080)`. Only this preview is affected — `opentoonz_render` and
+`opentoonz_render_video` frames are never downscaled.
 
 ### `opentoonz_render(workspace, scene, out_name="render") -> str`
 Renders the scene to `render/<out_name>_NNNN.png` with `tcomposer`. Any stale
 frames with the same name are removed first, so counts are always accurate.
 
-### `opentoonz_render_video(workspace, scene, fps=24, out_name="video") -> str`
+### `opentoonz_render_video(workspace, scene, fps=24, out_name="video", audio=None) -> str`
 Renders then muxes the frames into `render/<out_name>.mp4` with ffmpeg.
+
+`audio` is an optional path to an external soundtrack (mp3, wav, ...). It is
+encoded as AAC and cut to the video's length. OpenToonz's own audio columns
+cannot be reached from the scripting API, so audio always comes from a file.
+
+### `opentoonz_render_gif(workspace, scene, fps=12, out_name="reel", max_width=None, colors=256) -> str`
+Renders then turns the frames into `render/<out_name>.gif` — a looping file, the
+cheap way to share a finished move. `fps` sets playback speed (12–15 reads well
+for hand-drawn work), `max_width` downscales, and `colors` caps the palette
+(2–256). ffmpeg builds a per-clip palette, so gradients do not band. Use
+`opentoonz_render_video` for anything with audio or that must stay full
+resolution.
 
 ## Escape hatch
 

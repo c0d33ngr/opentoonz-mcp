@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from opentoonz_mcp import draw
@@ -311,3 +313,220 @@ def test_import_level_rejects_empty_and_bad_names(context, monkeypatch):
         scenes_mod.import_level(context, "w", "ball", [], "main")
     with pytest.raises(OpentoonzMCPError, match="Invalid level name"):
         scenes_mod.import_level(context, "w", "../evil", ["/dev/null"], "main")
+
+
+# -- camera moves (patched into the .tnz XML) ---------------------------------
+#: Trimmed from a real OpenToonz 1.8 scene: the camera is a stage object in the
+#: xsheet's <pegbars>, carrying its own <camera> block. A second pegbar and the
+#: level column are present to prove the patcher only touches the camera.
+CAMERA_TNZ = """<tnz framecount="1" version="71.1">
+  <properties>
+    <cameras>
+      <camera>
+        <cameraSize>
+          5.33333 3
+        </cameraSize>
+        <cameraRes>
+          640 360
+        </cameraRes>
+        </camera>
+      </cameras>
+  </properties>
+  <xsheet>
+    <columns>
+      <levelColumn id='2'>
+        <status>
+          0
+        </status>
+        </levelColumn>
+      </columns>
+    <pegbars>
+      <pegbar activeboth="yes" id="Camera1">
+        <parent handle="B" id="None" parentHandle="B">
+          </parent>
+        <isOpened>
+          0
+        </isOpened>
+        <center>
+          0 0 0 0
+        </center>
+        <status>
+          0
+        </status>
+        <sx>
+          <default>
+            1
+          </default>
+          </sx>
+        <sc>
+          <default>
+            1
+          </default>
+          </sc>
+        <nodePos>
+          1.234e+09 5.678e+09
+        </nodePos>
+        <camera>
+          <cameraSize>
+            5.33333 3
+          </cameraSize>
+          <cameraRes>
+            640 360
+          </cameraRes>
+          </camera>
+        </pegbar>
+      <pegbar id="Col1">
+        <parent handle="B" id="Table" parentHandle="B">
+          </parent>
+        <status>
+          0
+        </status>
+        <nodePos>
+          1.234e+09 5.678e+09
+        </nodePos>
+        </pegbar>
+      </grid_dimension>
+      </pegbars>
+  </xsheet>
+</tnz>
+"""
+
+
+def _write_camera_scene(context, workspace="w", scene="main"):
+    ws, _ = workspace_mod.create(context, workspace)
+    path = ws.scene_path(scene)
+    path.write_text(CAMERA_TNZ, encoding="utf-8")
+    return ws, path
+
+
+def test_px_per_inch_is_read_from_the_scene():
+    """640 px over a 5.33333 inch camera is 120 dpi, matching IMAGE_DPI."""
+    assert scenes_mod._px_per_inch(CAMERA_TNZ) == pytest.approx(120, rel=1e-6)
+
+
+def test_px_per_inch_falls_back_when_the_camera_is_missing():
+    assert scenes_mod._px_per_inch("<tnz/>") == scenes_mod.IMAGE_DPI
+
+
+def test_camera_keys_default_to_no_movement():
+    keys = scenes_mod._normalise_camera_keys([{"frame": 1}, {"frame": 24, "x": 120}])
+    assert [key.frame for key in keys] == [1, 24]
+    assert keys[0] == scenes_mod.CameraKey(frame=1)
+    assert keys[1] == scenes_mod.CameraKey(frame=24, x=120.0)
+
+
+def test_camera_keys_are_sorted():
+    keys = scenes_mod._normalise_camera_keys([{"frame": 24, "zoom": 2}, {"frame": 1}])
+    assert [key.frame for key in keys] == [1, 24]
+
+
+def test_camera_keys_accept_a_single_keyframe():
+    keys = scenes_mod._normalise_camera_keys({"frame": 5, "x": 10})
+    assert keys == [scenes_mod.CameraKey(frame=5, x=10.0)]
+
+
+@pytest.mark.parametrize(
+    "keyframes",
+    [
+        [],
+        [{"x": 10}],
+        [{"frame": 0}],
+        [{"frame": -3}],
+        [{"frame": 1.5}],
+        [{"frame": "one"}],
+        [{"frame": 1, "zoom": 0}],
+        [{"frame": 1, "zoom": -2}],
+        [{"frame": 1, "x": "left"}],
+        [{"frame": 1}, {"frame": 1, "x": 5}],
+        "not-a-list",
+        [42],
+    ],
+)
+def test_camera_keys_reject_bad_input(keyframes):
+    with pytest.raises(OpentoonzMCPError):
+        scenes_mod._normalise_camera_keys(keyframes)
+
+
+def test_camera_channels_convert_units_and_drop_neutral_channels():
+    """Only the channels a move actually uses are written."""
+    keys = scenes_mod._normalise_camera_keys([{"frame": 1, "x": 0}, {"frame": 25, "x": 120, "zoom": 4}])
+    channels = scenes_mod._camera_channels(keys, 120.0)
+    # 1-based tool frames become 0-based xsheet rows; 120 px is 1 scene unit.
+    assert channels["x"] == [(0, 0.0), (24, 1.0)]
+    assert channels["sc"] == [(0, 1.0), (24, 0.25)]
+    assert "y" not in channels
+    assert "rot" not in channels
+
+
+def test_camera_channels_neutral_move_is_empty():
+    keys = scenes_mod._normalise_camera_keys([{"frame": 1}, {"frame": 24, "zoom": 1}])
+    assert scenes_mod._camera_channels(keys, 120.0) == {}
+
+
+def test_camera_move_writes_animated_channels(context):
+    _, path = _write_camera_scene(context)
+    moved = scenes_mod.camera_move(
+        context, "w", "main", [{"frame": 1, "x": 0, "rotation": 0}, {"frame": 24, "x": 240, "rotation": 90}]
+    )
+    text = path.read_text(encoding="utf-8")
+    assert moved.channels == ["x", "rot"]
+    assert (moved.first_frame, moved.last_frame) == (1, 24)
+    assert text.count("<keyframes>") == 2
+    rows = re.findall(r"<L>\s*(\d+)\s+([\d.-]+)\s*</L>", text)
+    assert [int(frame) for frame, _ in rows] == [0, 23, 0, 23]
+    # 240 px at 120 dpi is 2 scene units, written on row 23 (frame 24 minus 1).
+    # The value is not exactly 2: the scene's cameraSize is a 6-digit
+    # approximation, so the stored dpi is 640/5.33333 rather than a clean 120.
+    assert float(rows[1][1]) == pytest.approx(2.0, abs=1e-4)
+    assert float(rows[3][1]) == pytest.approx(90.0)
+    # the pegbar keeps everything it had before
+    assert "<center>\n          0 0 0 0\n        </center>" in text
+    assert "<sx>" in text
+
+
+def test_camera_move_second_call_replaces_the_first(context):
+    """Keyframes are complete poses: a later move must not inherit an old channel.
+
+    Without this, panning and then zooming would leave the pan switched on.
+    """
+    _, path = _write_camera_scene(context)
+    scenes_mod.camera_move(context, "w", "main", [{"frame": 1, "x": 0}, {"frame": 24, "x": 120}])
+    assert "<x>" in path.read_text(encoding="utf-8")
+    moved = scenes_mod.camera_move(context, "w", "main", [{"frame": 1, "zoom": 1}, {"frame": 24, "zoom": 2}])
+    text = path.read_text(encoding="utf-8")
+    assert moved.channels == ["sc"]
+    assert "<x>" not in text
+    assert text.count("<keyframes>") == 1
+
+
+def test_camera_move_does_not_touch_other_pegbars_or_the_xsheet(context):
+    _, path = _write_camera_scene(context)
+    scenes_mod.camera_move(context, "w", "main", [{"frame": 1, "y": 0}, {"frame": 24, "y": 120}])
+    text = path.read_text(encoding="utf-8")
+    camera = text[text.index('id="Camera1"') : text.index("</pegbars>")]
+    col1 = text[text.index('id="Col1"') : text.index("</pegbars>")]
+    assert "keyframes" in camera
+    assert "keyframes" not in col1
+    assert "<levelColumn id='2'>" in text
+    # <status> appears in both the level column and the pegbars; none may change.
+    assert text.count("<status>") == 3
+
+
+def test_camera_move_rejects_a_neutral_move(context):
+    _write_camera_scene(context)
+    with pytest.raises(OpentoonzMCPError, match="Nothing to animate"):
+        scenes_mod.camera_move(context, "w", "main", [{"frame": 1}, {"frame": 24}])
+
+
+def test_camera_move_missing_scene(context):
+    workspace_mod.create(context, "w")
+    with pytest.raises(OpentoonzMCPError, match="Scene not found"):
+        scenes_mod.camera_move(context, "w", "nope", [{"frame": 1, "x": 10}, {"frame": 2, "x": 20}])
+
+
+def test_camera_move_without_a_camera_pegbar(context):
+    workspace_mod.create(context, "w")
+    _, path = _write_scene(context)  # SAMPLE_TNZ has no pegbars
+    with pytest.raises(OpentoonzMCPError, match="No <pegbar"):
+        scenes_mod.camera_move(context, "w", "main", [{"frame": 1, "x": 10}, {"frame": 2, "x": 20}])
+    assert path.read_text(encoding="utf-8") == SAMPLE_TNZ

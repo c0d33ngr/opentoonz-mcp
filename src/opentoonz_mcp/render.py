@@ -13,6 +13,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from PIL import Image
+
 from . import bridge
 from . import workspace as workspace_mod
 from .context import Context
@@ -30,6 +32,8 @@ class RenderResult:
     exit_code: int | None
     timed_out: bool
     duration: float
+    #: Original pixel size, set only when a preview was downscaled in place.
+    downscaled_from: tuple[int, int] | None = None
 
 
 def _stem(out_name: str, default: str) -> str:
@@ -84,6 +88,11 @@ def _run_tcomposer(
             errors="replace",
         )
         out, err, code = proc.stdout, proc.stderr, proc.returncode
+    except FileNotFoundError as exc:
+        raise RenderError(
+            f"tcomposer not found: {context.runtime.tcomposer_bin} — set OPENTOONZ_RUNTIME to an "
+            "extracted OpenToonz AppImage directory."
+        ) from exc
     except subprocess.TimeoutExpired as exc:
         timed_out = True
         out = bridge.as_text(exc.stdout)
@@ -102,6 +111,7 @@ def _run_tcomposer(
     )
 
 
+@workspace_mod.locked
 def render_frames(
     context: Context,
     workspace: str,
@@ -121,27 +131,85 @@ def render_frames(
     return _run_tcomposer(context, scene_path, ws.render / (stem + ".png"), frame=frame, frame_range=frame_range)
 
 
+def _downscale(path: Path, max_width: int) -> tuple[int, int] | None:
+    """Shrink a rendered PNG in place; return its original size if it changed.
+
+    Only previews are shrunk: a full-resolution frame or a video frame is
+    never touched, so the delivered render keeps the scene's resolution.
+    """
+    with Image.open(path) as img:
+        if img.width <= max_width:
+            return None
+        original = img.size
+        height = max(1, round(img.height * max_width / img.width))
+        resized = img.convert("RGBA").resize((max_width, height), Image.LANCZOS)
+    resized.save(path, format="PNG")
+    return original
+
+
 def render_frame(
     context: Context,
     workspace: str,
     scene: str,
     frame: int = 1,
     out_name: str = "look",
+    *,
+    max_width: int | None = None,
 ) -> RenderResult:
-    """Render a single frame — the agent's "look" at its work."""
-    return render_frames(context, workspace, scene, out_name=out_name, frame=frame)
+    """Render a single frame — the agent's "look" at its work.
+
+    ``max_width`` downscales the returned PNG in place, so looking at a large
+    scene costs fewer image tokens. The file *is* the preview; the scene's own
+    resolution is untouched, and render/render_video frames are never shrunk.
+    """
+    result = render_frames(context, workspace, scene, out_name=out_name, frame=frame)
+    if max_width is None or not result.frames:
+        return result
+    width = int(max_width)
+    if width < 1:
+        raise RenderError(f"max_width must be at least 1, got {max_width!r}")
+    result.downscaled_from = _downscale(result.frames[0], width)
+    return result
 
 
+def _run_ffmpeg(context: Context, cmd: list[str], output: Path, label: str) -> None:
+    """Run ffmpeg and translate its failure modes into RenderError."""
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=context.settings.render_timeout, errors="replace"
+        )
+    except FileNotFoundError as exc:
+        raise RenderError(f"ffmpeg not found: {context.settings.ffmpeg} — install ffmpeg to write {label}.") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RenderError(f"ffmpeg timed out after {context.settings.render_timeout}s") from exc
+    if proc.returncode != 0 or not output.exists():
+        raise RenderError(f"ffmpeg failed (exit={proc.returncode}).\n{proc.stderr[-1500:]}")
+
+
+@workspace_mod.locked
 def render_video(
     context: Context,
     workspace: str,
     scene: str,
     fps: int = 24,
     out_name: str = "video",
+    *,
+    audio: str | None = None,
 ) -> tuple[Path, RenderResult]:
-    """Render frames and mux them into an MP4 with ffmpeg."""
+    """Render frames and mux them into an MP4 with ffmpeg.
+
+    ``audio`` adds a soundtrack from an external file. OpenToonz's own audio
+    columns are unreachable from the scripting API, so audio is always supplied
+    from outside; it is encoded as AAC and trimmed to the video (``-shortest``).
+    """
     ws = workspace_mod.require(context, workspace)
     base = out_name.strip().rstrip("_") or "video"
+    track: Path | None = None
+    if audio is not None:
+        # Validate before rendering: a missing track should not cost a render.
+        track = Path(audio).expanduser()
+        if not track.is_file():
+            raise RenderError(f"Audio file not found: {track}")
     result = render_frames(context, workspace, scene, out_name=base)
     if not result.frames:
         raise RenderError(f"tcomposer produced no frames (exit={result.exit_code}).\n{result.log}")
@@ -154,18 +222,59 @@ def render_video(
         str(int(fps)),
         "-i",
         pattern,
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        str(video),
     ]
-    try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=context.settings.render_timeout, errors="replace"
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RenderError(f"ffmpeg timed out after {context.settings.render_timeout}s") from exc
-    if proc.returncode != 0 or not video.exists():
-        raise RenderError(f"ffmpeg failed (exit={proc.returncode}).\n{proc.stderr[-1500:]}")
+    if track is not None:
+        cmd += ["-i", str(track), "-c:a", "aac", "-shortest"]
+    cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", str(video)]
+    _run_ffmpeg(context, cmd, video, "video")
     return video, result
+
+
+@workspace_mod.locked
+def render_gif(
+    context: Context,
+    workspace: str,
+    scene: str,
+    fps: int = 12,
+    out_name: str = "reel",
+    *,
+    max_width: int | None = None,
+    colors: int = 256,
+) -> tuple[Path, RenderResult]:
+    """Render frames and turn them into a looping GIF with ffmpeg.
+
+    A GIF is the cheap way to share a finished move: one file, no player, and it
+    loops. Frames come from the same ``tcomposer`` pass as :func:`render_video`;
+    ffmpeg builds a per-clip palette (``palettegen``/``paletteuse``) so gradients
+    do not band the way a fixed web palette would.
+    """
+    ws = workspace_mod.require(context, workspace)
+    base = out_name.strip().rstrip("_") or "reel"
+    if not 2 <= int(colors) <= 256:
+        raise RenderError(f"colors must be between 2 and 256, got {colors!r}")
+    if int(fps) < 1:
+        raise RenderError(f"fps must be at least 1, got {fps!r}")
+    if max_width is not None and int(max_width) < 1:
+        raise RenderError(f"max_width must be at least 1, got {max_width!r}")
+    result = render_frames(context, workspace, scene, out_name=base)
+    if not result.frames:
+        raise RenderError(f"tcomposer produced no frames (exit={result.exit_code}).\n{result.log}")
+    gif = ws.render / f"{base}.gif"
+    pattern = str(ws.render / f"{_stem(base, 'reel')}%04d.png")
+    scale = "" if max_width is None else f"scale={int(max_width)}:-1:flags=lanczos,"
+    chain = f"{scale}split[s0][s1];[s0]palettegen=max_colors={int(colors)}[p];[s1][p]paletteuse=dither=sierra2_4a"
+    cmd = [
+        context.settings.ffmpeg,
+        "-y",
+        "-framerate",
+        str(int(fps)),
+        "-i",
+        pattern,
+        "-filter_complex",
+        chain,
+        "-loop",
+        "0",
+        str(gif),
+    ]
+    _run_ffmpeg(context, cmd, gif, "GIF")
+    return gif, result

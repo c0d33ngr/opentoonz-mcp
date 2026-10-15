@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 from PIL import Image
 
@@ -231,3 +233,153 @@ def test_run_script_escape_hatch(live_context):
     result = bridge.run_script(ctx, ws.root, 'print("ESCAPE-HATCH");\nprint("__OTMCP_OK__");\n')
     assert result.ok
     assert "ESCAPE-HATCH" in result.stdout
+
+
+# -- camera moves -------------------------------------------------------------
+def _camera_scene(ctx, name):
+    """A 640x360 scene holding one 40x40 marker at (280,160), for 12 frames."""
+    ws, _ = W.create(ctx, name)
+    scenes.scene_new(ctx, name, "main", width=640, height=360)
+    marker = ws.drawings / "marker.0001.png"
+    draw.draw_frame(
+        marker,
+        [{"op": "rect", "xy": [280, 160, 320, 200], "fill": "#ff6b6b"}],
+        width=640,
+        height=360,
+        background=None,
+    )
+    scenes.import_level(ctx, name, "marker", [str(marker)], "main")
+    scenes.set_exposure(ctx, name, "main", "marker", [12])
+    return ws
+
+
+def _look(ctx, name, out_name, frame):
+    rendered = R.render_frame(ctx, name, "main", frame=frame, out_name=out_name)
+    assert rendered.frames, rendered.log
+    with Image.open(rendered.frames[0]) as img:
+        return img.convert("RGBA").getchannel("A").getbbox()
+
+
+def _aperture(bbox):
+    """Centre and size of an alpha bounding box, which scales are easier on."""
+    x0, y0, x1, y1 = bbox
+    return ((x0 + x1) / 2, (y0 + y1) / 2), (x1 - x0, y1 - y0)
+
+
+def _close(actual, expected, tol=3):
+    return all(abs(a - b) <= tol for a, b in zip(actual, expected, strict=True))
+
+
+def test_camera_move_pans_the_render(live_context):
+    """Panning the camera must move the artwork 1:1 in pixels (120 dpi)."""
+    ctx = live_context
+    _camera_scene(ctx, "cam")
+    centre, size = _aperture(_look(ctx, "cam", "base", 1))
+    assert _close(centre, (300, 180)) and _close(size, (40, 40))
+
+    moved = scenes.camera_move(ctx, "cam", "main", [{"frame": 1, "x": 0}, {"frame": 12, "x": 120}])
+    assert moved.channels == ["x"]
+    # camera right -> artwork left by 120 px, unchanged in size
+    centre, size = _aperture(_look(ctx, "cam", "pan", 12))
+    assert _close(centre, (180, 180)) and _close(size, (40, 40))
+
+
+def test_camera_move_zooms_about_the_frame_centre(live_context):
+    """Zoom is a magnification: 2 makes the artwork twice as large."""
+    ctx = live_context
+    _camera_scene(ctx, "camzoom")
+    scenes.camera_move(ctx, "camzoom", "main", [{"frame": 1, "zoom": 1}, {"frame": 12, "zoom": 2}])
+    centre, size = _aperture(_look(ctx, "camzoom", "zoom", 12))
+    # twice as large about the frame centre (320,180): the marker's own centre
+    # (300,180) is carried out to (280,180), and its 40 px width becomes 80.
+    assert _close(centre, (280, 180), tol=4) and _close(size, (80, 80), tol=6)
+
+
+def test_camera_move_second_call_replaces_the_first(live_context):
+    """Otherwise a pan would silently survive a later zoom (verified pitfall)."""
+    ctx = live_context
+    _camera_scene(ctx, "camswap")
+    scenes.camera_move(ctx, "camswap", "main", [{"frame": 1, "x": 0}, {"frame": 12, "x": 120}])
+    scenes.camera_move(ctx, "camswap", "main", [{"frame": 1, "zoom": 1}, {"frame": 12, "zoom": 2}])
+    assert "<x>" not in (W.require(ctx, "camswap").scene_path("main")).read_text(encoding="utf-8")
+    # the pan is gone, so the marker sits where a pure zoom puts it
+    centre, size = _aperture(_look(ctx, "camswap", "swap", 12))
+    assert _close(centre, (280, 180), tol=4) and _close(size, (80, 80), tol=6)
+
+
+def test_camera_move_survives_an_opentoonz_round_trip(live_context):
+    """A JS load/save — which every level import performs — must keep the move."""
+    ctx = live_context
+    ws = _camera_scene(ctx, "camkeep")
+    scenes.camera_move(
+        ctx,
+        "camkeep",
+        "main",
+        [{"frame": 1, "x": 0, "zoom": 1, "rotation": 0}, {"frame": 6, "x": 120, "zoom": 2, "rotation": 15}],
+    )
+    scene_path = ws.scene_path("main")
+    code = f'var scene = new Scene("{scene_path}");\nscene.save("{scene_path}");\nprint("{bridge.OK_MARKER}");\n'
+    assert bridge.run_script_or_raise(ctx, ws.root, code).ok
+    text = scene_path.read_text(encoding="utf-8")
+    assert text.count("<keyframes>") == 3
+    for tag in ("<x>", "<sc>", "<rot>"):
+        assert tag in text
+
+
+# -- output polish -------------------------------------------------------------
+def test_render_frame_max_width_downscales_only_the_preview(live_context):
+    """One small file for looking at, full resolution for what is delivered."""
+    ctx = live_context
+    _camera_scene(ctx, "preview")
+
+    preview = R.render_frame(ctx, "preview", "main", frame=1, out_name="small", max_width=320)
+    assert preview.downscaled_from == (640, 360)
+    with Image.open(preview.frames[0]) as img:
+        assert img.size == (320, 180)
+
+    full = R.render_frame(ctx, "preview", "main", frame=1, out_name="big")
+    assert full.downscaled_from is None
+    with Image.open(full.frames[0]) as img:
+        assert img.size == (640, 360)
+
+
+def test_render_gif_makes_a_looping_file(live_context):
+    ctx = live_context
+    _camera_scene(ctx, "gifreel")
+    gif, rendered = R.render_gif(ctx, "gifreel", "main", fps=8, out_name="reel", max_width=200)
+    assert gif.is_file() and gif.stat().st_size > 0
+    assert len(rendered.frames) == 12
+    with Image.open(gif) as img:
+        assert img.size[0] == 200
+        assert getattr(img, "n_frames", 1) == 12
+
+
+def test_render_video_muxes_an_external_track(live_context, tmp_path):
+    """OpenToonz audio is unreachable, so the soundtrack is always external."""
+    ctx = live_context
+    _camera_scene(ctx, "mux")
+    track = tmp_path / "score.wav"
+    subprocess.run(
+        [ctx.settings.ffmpeg, "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=2", str(track)],
+        capture_output=True,
+        check=True,
+    )
+    video, rendered = R.render_video(ctx, "mux", "main", fps=8, out_name="clip", audio=str(track))
+    assert video.is_file() and rendered.frames
+    probed = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream=codec_name",
+            "-of",
+            "csv=p=0",
+            str(video),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert probed.stdout.strip() == "aac"

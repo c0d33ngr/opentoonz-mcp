@@ -24,7 +24,7 @@ OpenToonz's own renderer. Reproduce it with
 
 OpenToonz is a deep, industry-grade 2D animation suite, but its scripting API is headless-only and awkward to reach. This server turns the validated, hard-won runtime recipe into a small, safe, well-documented tool surface an agent can actually use:
 
-- **Create a workspace** → **draw or import frames as a level** → **place cells on the xsheet** → **render a frame to look at it** → **render a video**.
+- **Create a workspace** → **draw or import frames as a level** → **place cells on the xsheet** → **move the camera** → **render a frame to look at it** → **render a video**.
 - A generic `opentoonz_run_script` escape hatch exposes the rest of the JS API.
 - Runs stay **self-contained**: an isolated `HOME` and a shared `TOONZROOT`, so nothing leaks into your real OpenToonz config.
 
@@ -51,7 +51,7 @@ tcomposer  (official headless renderer)  →  PNG frames  →  ffmpeg  →  MP4
 |---|---|
 | Python | 3.10+ |
 | OpenToonz | v1.x with `tcomposer`. On Linux, an extracted AppImage works best. |
-| ffmpeg | Only for `opentoonz_render_video` |
+| ffmpeg | Only for `opentoonz_render_video` / `opentoonz_render_gif` |
 
 See **[docs/installation.md](docs/installation.md)** for how to obtain and point at a runtime.
 
@@ -108,8 +108,9 @@ Ask your agent to:
 2. `opentoonz_draw_frames(...)` — draw a few RGBA frames, **or** generate PNGs elsewhere
 3. `opentoonz_import_images_as_level(...)` — bring them in as a level
 4. `opentoonz_exposure(...)` — hold each drawing for N frames (`[2]` = on 2s)
-5. `opentoonz_render_frame(...)` — look at the result
-6. `opentoonz_render_video(...)` — get an MP4
+5. `opentoonz_camera_move(...)` — pan, zoom or rotate the camera over the shot
+6. `opentoonz_render_frame(..., max_width=960)` — look at the result cheaply
+7. `opentoonz_render_video(...)` — get an MP4 (or `opentoonz_render_gif` for a GIF)
 
 Draw at the scene's resolution (`opentoonz_scene_new(width=..., height=...)` to change
 it from the 1920×1080 default) — levels composite 1:1, so art drawn at the scene's
@@ -136,11 +137,13 @@ OPENTOONZ_RUNTIME=/path/to/squashfs-root python examples/demo_reel.py     # thre
 | `opentoonz_scene_info` | Frames/columns/levels/cells |
 | `opentoonz_set_cells` | Place cells on the xsheet |
 | `opentoonz_exposure` | Hold each drawing for N frames (animate on 1s/2s/3s) |
+| `opentoonz_camera_move` | Animate the camera (pan / zoom / rotate), editably |
 | `opentoonz_draw_frame` | Draw one RGBA frame (PIL primitives + image compositing) |
 | `opentoonz_draw_frames` | Draw a whole sequence |
-| `opentoonz_render_frame` | Render one frame (the "look") |
+| `opentoonz_render_frame` | Render one frame (the "look"), optionally downscaled |
 | `opentoonz_render` | Render PNG frames via `tcomposer` |
-| `opentoonz_render_video` | Render + ffmpeg → MP4 |
+| `opentoonz_render_video` | Render + ffmpeg → MP4 (optional audio track) |
+| `opentoonz_render_gif` | Render + ffmpeg → looping GIF |
 | `opentoonz_run_script` | Arbitrary OpenToonz JS (escape hatch) |
 
 Full reference, including the drawing-op schema: **[docs/tools.md](docs/tools.md)**.
@@ -149,9 +152,11 @@ Full reference, including the drawing-op schema: **[docs/tools.md](docs/tools.md
 
 OpenToonz's JS API is a **subset** of the GUI, and some of the boundaries are sharp:
 
-- FX graphs, palette editing, camera splines, auto-inbetweening, and audio tracks
-  are unreachable. There is also **no way to delete** a level or a cell, which is
-  why level import *reuses* an existing level instead of replacing it.
+- FX graphs, palette editing, camera **splines**, auto-inbetweening, and audio
+  tracks are unreachable. There is also **no way to delete** a level or a cell,
+  which is why level import *reuses* an existing level instead of replacing it.
+  Camera *moves* (pan/zoom/rotate) do work — they are written into the camera's
+  stage-object channels, which OpenToonz renders and keeps editable.
 - **Vector (SVG) levels import but render blank** headlessly, and `setFrame()` on
   a loaded level never reaches the renderer. Raster PNG levels are the supported
   path; passing an SVG to the import tool is rejected with that explanation.

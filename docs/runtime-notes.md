@@ -98,8 +98,34 @@ and the official [ToonzScript reference](https://opentoonz.readthedocs.io/en/lat
     needing to run last.
 26. **Not bound (GUI-only):** FX graphs, palette editing, camera splines,
     auto-inbetweening, audio tracks.
+27. **The camera is a stage object in the scene XML.** There is no `Camera`
+    object and no stage-object setter in the API at all, so camera moves cannot
+    be animated from script. In the `.tnz` the camera is
+    `<pegbar activeboth="yes" id="Camera1">` inside the xsheet's `<pegbars>`,
+    carrying its own `<camera>` block — i.e. it is the same kind of thing as a
+    column's pegbar, just a differently-named one.
+28. **Stage-object motion is a per-channel `<keyframes>` list.** A channel holds
+    either `<default>value</default>` (constant) or a `<keyframes>` list of
+    `<L>frame value</L>`, where the tag is the interpolation type (`L` linear,
+    `C` constant, `S` speed-in/out, `E` ease-in/out, `Ep` ease percentage,
+    `Exp` exponential). Frames are 0-based xsheet rows, matching `<cell>`.
+    Channels seen on a camera: `x`, `y`, `z` (position), `sx`, `sy`, `sc`
+    (scale), `rot` (rotation), `shx`, `shy` (shear), plus a static `center`.
+    OpenToonz reads, *renders* and re-saves these — verified by patching a
+    scene by hand and measuring the frames — so a patched move is real and stays
+    editable in the GUI, unlike a baked-in one.
+29. **Camera units and signs (measured, not documented upstream).** Position is
+    in scene units: `cameraRes.x / cameraSize.x` pixels each, i.e. 120 px at the
+    120-dpi convention (fact 18). `x` positive pans the *view* right (`+1` unit
+    moved the artwork **−120 px**), `y` positive pans the view up (`+120 px`
+    down), `sc` is a divisor (`0.5` renders **twice as large**), and `rot` is
+    degrees *clockwise on screen* about the frame centre. Because it is a
+    physical camera, a pan's on-screen size is multiplied by the zoom.
+30. **Audio columns are unreachable** from the scripting API, so a soundtrack is
+    always muxed in from an external file with ffmpeg (`-c:a aac -shortest`).
 
-`scripts/probe_api.py` re-runs this whole survey against an installed runtime, so
+`scripts/probe_api.py` re-runs the scripting-API survey against an installed
+runtime, and `scripts/probe_camera.py` re-establishes the camera facts above, so
 a version bump can be checked rather than guessed at.
 
 ## Workarounds for the gaps
@@ -111,5 +137,7 @@ a version bump can be checked rather than guessed at.
 - **Replacing a level** → impossible (no `removeLevel`); reuse the name and
   overwrite the drawings, or start a fresh scene (fact 20).
 - **FX** → pre-bake in the image pipeline (PIL/ffmpeg).
-- **Camera moves** → bake into the level frames.
-- **Audio** → mux with ffmpeg at the end.
+- **Camera moves** → patch the camera's channels in the `.tnz`
+  (`opentoonz_camera_move`), which stays editable in the GUI (facts 27–29).
+- **Audio** → mux with ffmpeg at the end (`opentoonz_render_video(audio=...)`),
+  since audio columns are unreachable (fact 30).

@@ -10,8 +10,8 @@ src/opentoonz_mcp/
 ├── bridge.py      Run .toonzscript files headlessly; capture output
 ├── workspace.py   Workspace lifecycle (drawings/render/scripts)
 ├── draw.py        PIL frame authoring (RGBA PNG frames + op schema)
-├── scenes.py      Scene create/resize, inspect, level import/reuse, cell & exposure timing
-├── render.py      tcomposer rendering + ffmpeg muxing
+├── scenes.py      Scene create/resize, camera moves, inspect, level import/reuse, cell & exposure timing
+├── render.py      tcomposer rendering + ffmpeg muxing (MP4, GIF)
 └── server.py      FastMCP tool definitions (thin wrappers over the above)
 ```
 
@@ -25,7 +25,8 @@ opentoonz_draw_* / external tool   →  drawings/<level>.<NNNN>.png  (RGBA)
 opentoonz_import_images_as_level   →  scripts/*.toonzscript → OpenToonz CLI → scene .tnz
 opentoonz_set_cells / _exposure    →  scripts/*.toonzscript → OpenToonz CLI → scene .tnz
 opentoonz_scene_new / _set_scene_settings  →  .tnz XML patched in place (cameraRes/cameraSize/fps)
-opentoonz_render[_frame|_video]    →  tcomposer → render/*.png  (→ ffmpeg → *.mp4)
+opentoonz_camera_move              →  .tnz XML patched in place (camera stage-object channels)
+opentoonz_render[_frame|_video|_gif]  →  tcomposer → render/*.png  (→ ffmpeg → *.mp4 / *.gif)
 ```
 
 ## Key design decisions
@@ -91,6 +92,26 @@ already knows. So `import_level` looks the name up first and, if it exists, reus
 that level and overwrites its drawings. This is what makes the
 draw → import → render → redraw loop work, and it pushes the tool surface toward
 "additive only" by design rather than by preference.
+
+### 11. Camera moves are stage-object channels, not a bake
+There is no camera in the JS API — not a setter, not even a `Camera` object. In
+the scene XML the camera is a *stage object*: `<pegbar id="Camera1">` in the
+xsheet's `<pegbars>`, with the same kind of channels as any column's pegbar
+(`x`, `y`, `sc`, `rot`, ...). `camera_move` writes linear keyframes into those
+channels. OpenToonz renders them and preserves them on save, so the result is a
+genuine camera move that stays editable in the Function Editor — a *bake* into
+the level frames was the fallback plan and was not needed.
+`scripts/probe_camera.py` re-establishes the facts it depends on.
+
+### 12. One workspace, one writer
+A scene is read, edited and written as a whole, and the edit spans an OpenToonz
+subprocess — so two callers on one workspace would interleave and lose changes.
+Every scene and render operation therefore runs under a re-entrant `flock` on
+`<workspace>/.lock` (`workspace.locked`, applied at the library layer so direct
+callers get it too). Re-entrancy matters because operations legitimately nest
+(`set_exposure` → `set_cells`, `render_video` → `render_frames`). The lock is
+advisory, released on process death, and a busy workspace times out with a clear
+message instead of hanging.
 
 ## Extension points
 

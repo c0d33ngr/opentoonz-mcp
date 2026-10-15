@@ -15,11 +15,13 @@ EXPECTED_TOOLS = {
     "opentoonz_import_images_as_level",
     "opentoonz_set_cells",
     "opentoonz_exposure",
+    "opentoonz_camera_move",
     "opentoonz_draw_frame",
     "opentoonz_draw_frames",
     "opentoonz_render_frame",
     "opentoonz_render",
     "opentoonz_render_video",
+    "opentoonz_render_gif",
     "opentoonz_run_script",
 }
 

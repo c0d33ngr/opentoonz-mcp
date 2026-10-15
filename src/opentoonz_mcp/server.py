@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 
 from fastmcp import FastMCP
+from PIL import Image
 
 from . import __version__, bridge, draw, scenes
 from . import render as render_mod
@@ -22,8 +23,9 @@ mcp = FastMCP(
         "look at the result → opentoonz_render_video to produce an MP4. Everything runs "
         "through OpenToonz's scripting CLI and the official tcomposer renderer; no GUI "
         "is required. opentoonz_scene_new and opentoonz_set_scene_settings change the "
-        "camera resolution. Use opentoonz_run_script as a generic escape hatch for the "
-        "full JS API."
+        "camera resolution, and opentoonz_camera_move animates the camera over time "
+        "(pan, zoom, rotate). Use opentoonz_run_script as a generic escape hatch for "
+        "the full JS API."
     ),
     version=__version__,
 )
@@ -131,8 +133,12 @@ def opentoonz_list_workspaces() -> str:
     for ws in workspaces:
         scene_names = [p.name for p in ws.scenes()]
         videos = [p.name for p in sorted(ws.render.glob("*.mp4"))]
+        gifs = [p.name for p in sorted(ws.render.glob("*.gif"))]
         frames = len(list(ws.render.glob("*.png")))
-        lines.append(f"{ws.name}: scenes={scene_names} videos={videos} frames={frames}")
+        lines.append(
+            f"{ws.name}: scenes={scene_names} videos={videos} gifs={gifs} frames={frames} "
+            f"size={workspace_mod.human_size(workspace_mod.disk_usage(ws))}"
+        )
     return "\n".join(lines)
 
 
@@ -278,6 +284,36 @@ def opentoonz_exposure(
     )
 
 
+@mcp.tool()
+def opentoonz_camera_move(workspace: str, scene: str, keyframes: list[dict]) -> str:
+    """Move the scene's camera over the shot — pan, zoom, and rotate.
+
+    keyframes: list of {"frame": int, "x": px, "y": px, "zoom": factor,
+    "rotation": degrees}. Only "frame" is required; the rest default to no
+    movement (x=0, y=0, zoom=1, rotation=0). "frame" is a 1-based shot frame —
+    the same numbering as opentoonz_render_frame.
+
+    x/y are the camera's position in scene pixels: +x pans the view right and +y
+    pans it up, so the artwork moves the opposite way. zoom is a magnification
+    (2 renders the art twice as large), and rotation is in degrees, clockwise on
+    screen, about the frame centre. OpenToonz interpolates linearly between
+    keyframes.
+
+    The move is stored in the scene file as the camera's animation channels, so
+    it survives later edits and stays editable in OpenToonz's Function Editor.
+    Re-render to see it.
+    """
+    try:
+        moved = scenes.camera_move(get_context(), workspace, scene, keyframes)
+    except OpentoonzMCPError as exc:
+        return _fail(exc)
+    return (
+        f"OK: camera move over {len(moved.keyframes)} keyframes, frames "
+        f"{moved.first_frame}-{moved.last_frame} in '{scene}'\n"
+        f"channels: {', '.join(moved.channels)} at {moved.px_per_inch:g} px/unit"
+    )
+
+
 # -- drawing ------------------------------------------------------------------
 @mcp.tool()
 def opentoonz_draw_frame(
@@ -333,16 +369,35 @@ def opentoonz_draw_frames(
 
 
 # -- rendering ----------------------------------------------------------------
+def _png_size(path: Path) -> str:
+    with Image.open(path) as img:
+        return f"{img.width}x{img.height}"
+
+
 @mcp.tool()
-def opentoonz_render_frame(workspace: str, scene: str, frame: int = 1, out_name: str = "look") -> str:
-    """Render a single frame to a PNG — the agent's 'look' at the result."""
+def opentoonz_render_frame(
+    workspace: str, scene: str, frame: int = 1, out_name: str = "look", max_width: int | None = None
+) -> str:
+    """Render a single frame to a PNG — the agent's 'look' at the result.
+
+    max_width (optional) downscales the returned PNG in place to that width, so
+    a large scene costs fewer image tokens to inspect. The file itself becomes
+    the smaller preview; the scene's resolution is unchanged, and
+    opentoonz_render / opentoonz_render_video output is never downscaled.
+    """
     try:
-        result = render_mod.render_frame(get_context(), workspace, scene, frame=frame, out_name=out_name)
+        result = render_mod.render_frame(
+            get_context(), workspace, scene, frame=frame, out_name=out_name, max_width=max_width
+        )
     except OpentoonzMCPError as exc:
         return _fail(exc)
     if not result.frames:
         return f"FAILED (exit={result.exit_code}, {result.duration:.1f}s)\n{result.log}"
-    return f"OK: frame -> {result.frames[0]}"
+    size = _png_size(result.frames[0])
+    if result.downscaled_from:
+        source = result.downscaled_from
+        return f"OK: frame -> {result.frames[0]} ({size}, downscaled from {source[0]}x{source[1]})"
+    return f"OK: frame -> {result.frames[0]} ({size})"
 
 
 @mcp.tool()
@@ -358,13 +413,49 @@ def opentoonz_render(workspace: str, scene: str, out_name: str = "render") -> st
 
 
 @mcp.tool()
-def opentoonz_render_video(workspace: str, scene: str, fps: int = 24, out_name: str = "video") -> str:
-    """Render a scene and mux the frames into an MP4 with ffmpeg."""
+def opentoonz_render_video(
+    workspace: str, scene: str, fps: int = 24, out_name: str = "video", audio: str | None = None
+) -> str:
+    """Render a scene and mux the frames into an MP4 with ffmpeg.
+
+    audio (optional) is a path to an external soundtrack (mp3, wav, ...). It is
+    encoded as AAC and cut to the video's length. OpenToonz's own audio columns
+    cannot be reached from the scripting API, so audio always comes from a file.
+    """
     try:
-        video, result = render_mod.render_video(get_context(), workspace, scene, fps=fps, out_name=out_name)
+        video, result = render_mod.render_video(
+            get_context(), workspace, scene, fps=fps, out_name=out_name, audio=audio
+        )
     except OpentoonzMCPError as exc:
         return _fail(exc)
-    return f"OK: {len(result.frames)} frames @ {fps}fps -> {video}"
+    track = f" + audio {Path(audio).name}" if audio else ""
+    return f"OK: {len(result.frames)} frames @ {fps}fps{track} -> {video}"
+
+
+@mcp.tool()
+def opentoonz_render_gif(
+    workspace: str,
+    scene: str,
+    fps: int = 12,
+    out_name: str = "reel",
+    max_width: int | None = None,
+    colors: int = 256,
+) -> str:
+    """Render a scene to a looping GIF — the shareable form of a short move.
+
+    fps sets playback speed (12–15 reads well for hand-drawn work), max_width
+    downscales the GIF, and colors caps the palette (2–256). Frames come from the
+    same tcomposer pass as opentoonz_render_video; use that for anything with
+    audio or that must stay full resolution.
+    """
+    try:
+        gif, result = render_mod.render_gif(
+            get_context(), workspace, scene, fps=fps, out_name=out_name, max_width=max_width, colors=colors
+        )
+    except OpentoonzMCPError as exc:
+        return _fail(exc)
+    size = workspace_mod.human_size(gif.stat().st_size)
+    return f"OK: {len(result.frames)} frames @ {fps}fps -> {gif} ({_png_size(gif)}, {size})"
 
 
 # -- escape hatch -------------------------------------------------------------
@@ -382,7 +473,8 @@ def opentoonz_run_script(workspace: str, code: str, timeout: int = 90) -> str:
     try:
         ctx = get_context()
         ws = workspace_mod.require(ctx, workspace)
-        result = bridge.run_script(ctx, ws.root, code, timeout=timeout)
+        with workspace_mod.lock(ctx, workspace):
+            result = bridge.run_script(ctx, ws.root, code, timeout=timeout)
     except OpentoonzMCPError as exc:
         return _fail(exc)
     return result.summary()

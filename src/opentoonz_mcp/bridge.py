@@ -121,6 +121,11 @@ def run_script(
             errors="replace",
         )
         out, err, rc = proc.stdout, proc.stderr, proc.returncode
+    except FileNotFoundError as exc:
+        raise ScriptError(
+            f"OpenToonz not found: {context.runtime.ot_bin} — set OPENTOONZ_RUNTIME to an extracted "
+            "OpenToonz AppImage directory."
+        ) from exc
     except subprocess.TimeoutExpired as exc:
         timed_out = True
         out = _as_text(exc.stdout)
