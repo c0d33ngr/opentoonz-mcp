@@ -11,6 +11,13 @@ It works by running OpenToonz's **built-in scripting engine** in CLI mode and th
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://github.com/c0d33ngr/opentoonz-mcp)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
+![A scene built through the MCP tools: a static background, a bouncing ball animated on 1s, and a title card, each a separate level composited by OpenToonz and rendered headlessly](docs/demo.gif)
+
+<sub>Three separately drawn levels — background, ball, title — stacked as columns on
+the xsheet, the static ones held with `opentoonz_exposure`, and composited by
+OpenToonz's own renderer. Reproduce it with
+[`examples/demo_reel.py`](examples/demo_reel.py).</sub>
+
 ---
 
 ## Why
@@ -100,13 +107,19 @@ Ask your agent to:
 1. `opentoonz_create_workspace("my-short")`
 2. `opentoonz_draw_frames(...)` — draw a few RGBA frames, **or** generate PNGs elsewhere
 3. `opentoonz_import_images_as_level(...)` — bring them in as a level
-4. `opentoonz_render_frame(...)` — look at the result
-5. `opentoonz_render_video(...)` — get an MP4
+4. `opentoonz_exposure(...)` — hold each drawing for N frames (`[2]` = on 2s)
+5. `opentoonz_render_frame(...)` — look at the result
+6. `opentoonz_render_video(...)` — get an MP4
 
-Or run the example end-to-end:
+Draw at the scene's resolution (`opentoonz_scene_new(width=..., height=...)` to change
+it from the 1920×1080 default) — levels composite 1:1, so art drawn at the scene's
+size fills the frame.
+
+Or run the examples end-to-end:
 
 ```bash
-OPENTOONZ_RUNTIME=/path/to/squashfs-root python examples/bouncing_ball.py
+OPENTOONZ_RUNTIME=/path/to/squashfs-root python examples/bouncing_ball.py  # one level → MP4
+OPENTOONZ_RUNTIME=/path/to/squashfs-root python examples/demo_reel.py     # three levels → MP4 + the GIF above
 ```
 
 ## Tools
@@ -117,11 +130,13 @@ OPENTOONZ_RUNTIME=/path/to/squashfs-root python examples/bouncing_ball.py
 | `opentoonz_doctor` | Full diagnostics (paths, versions, state) |
 | `opentoonz_create_workspace` | Create a workspace (idempotent) |
 | `opentoonz_list_workspaces` | Inventory workspaces/scenes/videos |
-| `opentoonz_scene_new` | Create an empty scene |
-| `opentoonz_import_images_as_level` | Image sequence → raster level (additive) |
+| `opentoonz_scene_new` | Create a scene, optionally setting resolution/fps |
+| `opentoonz_set_scene_settings` | Change camera resolution / fps |
+| `opentoonz_import_images_as_level` | Image sequence → raster level (additive, re-runnable) |
 | `opentoonz_scene_info` | Frames/columns/levels/cells |
 | `opentoonz_set_cells` | Place cells on the xsheet |
-| `opentoonz_draw_frame` | Draw one RGBA frame (PIL primitives) |
+| `opentoonz_exposure` | Hold each drawing for N frames (animate on 1s/2s/3s) |
+| `opentoonz_draw_frame` | Draw one RGBA frame (PIL primitives + image compositing) |
 | `opentoonz_draw_frames` | Draw a whole sequence |
 | `opentoonz_render_frame` | Render one frame (the "look") |
 | `opentoonz_render` | Render PNG frames via `tcomposer` |
@@ -132,11 +147,20 @@ Full reference, including the drawing-op schema: **[docs/tools.md](docs/tools.md
 
 ## Limitations
 
-OpenToonz's JS API is a **subset** of the GUI. Not reachable today:
+OpenToonz's JS API is a **subset** of the GUI, and some of the boundaries are sharp:
 
-- FX graphs, palette editing, camera splines, auto-inbetweening, audio tracks.
-- Only **raster** levels are exercised end-to-end (vector/`ToonzRaster` are untested).
-- Rendering needs a working `tcomposer`; `Renderer.renderFrame` **deadlocks** in CLI mode and is intentionally avoided.
+- FX graphs, palette editing, camera splines, auto-inbetweening, and audio tracks
+  are unreachable. There is also **no way to delete** a level or a cell, which is
+  why level import *reuses* an existing level instead of replacing it.
+- **Vector (SVG) levels import but render blank** headlessly, and `setFrame()` on
+  a loaded level never reaches the renderer. Raster PNG levels are the supported
+  path; passing an SVG to the import tool is rejected with that explanation.
+- Camera resolution is **not** scriptable, so `opentoonz_set_scene_settings`
+  patches the scene file's XML — keeping the camera's physical size in step, so
+  art drawn at the scene's size fills the frame.
+- Rendering needs a working `tcomposer`; `Renderer.renderFrame` **deadlocks** in
+  CLI mode and is intentionally avoided.
+- Exercised on **Linux** only so far.
 
 Workarounds and the full picture: **[docs/runtime-notes.md](docs/runtime-notes.md)**.
 

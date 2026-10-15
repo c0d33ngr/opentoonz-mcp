@@ -4,17 +4,17 @@ build-backend = "hatchling.build"
 
 [project]
 name = "opentoonz-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "Headless OpenToonz automation for AI agents, exposed as an MCP server."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "opentoonz-mcp contributors" }]
 keywords = ["opentoonz", "mcp", "model-context-protocol", "animation", "automation", "ai", "render"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: MIT License",
   "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
@@ -36,7 +36,9 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/c0d33ngr/opentoonz-mcp"
+Repository = "https://github.com/c0d33ngr/opentoonz-mcp"
 Issues = "https://github.com/c0d33ngr/opentoonz-mcp/issues"
+Changelog = "https://github.com/c0d33ngr/opentoonz-mcp/blob/main/CHANGELOG.md"
 
 [project.scripts]
 opentoonz-mcp = "opentoonz_mcp.server:main"

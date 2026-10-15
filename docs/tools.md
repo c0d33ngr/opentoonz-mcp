@@ -25,8 +25,23 @@ Lists each workspace with its scenes and rendered videos.
 
 ## Scenes
 
-### `opentoonz_scene_new(workspace: str, scene: str = "main") -> str`
-Creates (or overwrites) an empty `.tnz` scene.
+### `opentoonz_scene_new(workspace: str, scene: str = "main", width=None, height=None, fps=None) -> str`
+Creates (or overwrites) an empty `.tnz` scene. Pass `width`/`height` to set the
+camera resolution (default 1920×1080) — see `opentoonz_set_scene_settings`.
+
+### `opentoonz_set_scene_settings(workspace, scene, width=None, height=None, fps=None) -> str`
+Changes a scene's camera resolution and/or frame rate.
+
+- **Why it patches XML:** OpenToonz's scripting API has no camera setter
+  (`scene.setCameraSize` does not exist), so the scene file — which is plain
+  XML — is edited in place. Later edits to the scene keep the setting.
+- `width`/`height` may be given independently; the omitted one keeps its value.
+- The camera's **physical size** is rescaled to match, so art drawn at the
+  scene's size still fills the frame (leaving it at the 16×9 default while
+  shrinking the resolution would render 640×360 art as a 213×120 box).
+- Levels composite **1:1**, so draw art at the scene's resolution. Drawing at
+  1920×1080 and then rendering at 480×270 shows the *centre* of the art, not a
+  scaled-down version of it.
 
 ### `opentoonz_import_images_as_level(workspace, level_name, image_paths, scene="main", start_row=0, column=0) -> str`
 Imports an **ordered** list of image paths as a raster level and places one frame
@@ -34,15 +49,40 @@ per row on the xsheet, starting at `start_row` in `column`.
 
 - **Additive:** if the scene already exists it is loaded first, so you can call
   this repeatedly to build a multi-level / multi-column scene.
+- **Re-runnable:** re-importing the same `level_name` reuses the existing level
+  and overwrites its drawings. OpenToonz rejects a duplicate level name and has
+  no `removeLevel`, so reuse is the only way to iterate on artwork. Shrinking a
+  level (5 frames → 3) removes the orphaned `drawings/<level>.0004.png`/
+  `.0005.png` files that would otherwise be loaded back in.
 - Images are converted to **RGBA PNG** (OpenToonz rejects RGB-only images at
-  render time) and stored as `drawings/<level_name>.%04d.png`.
-- The default camera is **1920×1080** — draw at that size for full-frame output.
+  render time) and stored as `drawings/<level_name>.%04d.png`. Art already
+  sitting in `drawings/` is left in place.
+- SVG input is **rejected** — vector levels load but rasterise to nothing (see
+  [troubleshooting.md](troubleshooting.md)).
+- Level names must be 1–64 characters of `A-Z a-z 0-9 _ -` (they become file
+  prefixes).
 
-### `opentoonz_scene_info(workspace, scene) -> str`
-Reports `frames=`, `columns=`, then one line per level and per cell.
+### `opentoonz_scene_info(workspace, scene, max_rows=1000) -> str`
+Reports `frames=`, `columns=`, then one line per level and per cell. The cell map
+is scanned row by row, so it stops at `max_rows` (default 1000) and says
+`note: cell list truncated` when a scene is taller.
 
 ### `opentoonz_set_cells(workspace, scene, placements) -> str`
 `placements` is a list of `{"row": int, "col": int, "level": str, "fid": int|str}`.
+
+### `opentoonz_exposure(workspace, scene, level, exposures, start_row=0, column=0) -> str`
+Times a level by holding each drawing for N frames — the animation-native way to
+say "on 2s":
+
+| `exposures` | Meaning |
+|---|---|
+| `[3]` | hold *every* drawing for 3 frames |
+| `[2, 4, 1]` | drawing 1 → 2 frames, drawing 2 → 4, drawing 3 → 1 |
+
+Every row of a hold gets its own cell: an empty xsheet row renders nothing, so
+"holding" means repeating the drawing's `fid` across the rows. Rows are
+contiguous from `start_row`, and the scene's frame count follows what is placed.
+The level must already be in the scene.
 
 ## Drawing
 
@@ -69,10 +109,22 @@ An op is a dict with an `op` key and keyword arguments:
 | `polygon` | `points=[[x,y],...]`, `fill`, `outline`, `width` |
 | `polyline` | `points=[[x,y],...]`, `fill`, `width` |
 | `text` | `xy=[x,y]`, `text`, `fill`, `size`, `anchor` (PIL anchor, e.g. `"la"`) |
+| `image` | `path`, `xy=[x,y]`, `size=[w,h]` (optional resize), `opacity` (0..1) |
 
 Colours accept `#rgb`, `#rrggbb`, `#rrggbbaa`, or `[r, g, b(, a)]`.
 
 `background` may be a colour or `null` for transparency.
+
+The `image` op composites an existing PNG onto the frame — how art made elsewhere
+joins a drawn frame:
+
+```json
+[
+  {"op": "rect",  "xy": [0, 0, 1920, 1080], "fill": "#101828"},
+  {"op": "image", "path": "/abs/character.png", "xy": [700, 300], "size": [520, 520]},
+  {"op": "text",  "xy": [60, 90], "text": "Scene 1", "fill": "#e0b184", "size": 72}
+]
+```
 
 Example:
 

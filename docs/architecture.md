@@ -10,7 +10,7 @@ src/opentoonz_mcp/
 ├── bridge.py      Run .toonzscript files headlessly; capture output
 ├── workspace.py   Workspace lifecycle (drawings/render/scripts)
 ├── draw.py        PIL frame authoring (RGBA PNG frames + op schema)
-├── scenes.py      Scene create/inspect, additive level import, cell placement
+├── scenes.py      Scene create/resize, inspect, level import/reuse, cell & exposure timing
 ├── render.py      tcomposer rendering + ffmpeg muxing
 └── server.py      FastMCP tool definitions (thin wrappers over the above)
 ```
@@ -23,7 +23,8 @@ behaviour is testable directly through the library modules (see `tests/`).
 ```
 opentoonz_draw_* / external tool   →  drawings/<level>.<NNNN>.png  (RGBA)
 opentoonz_import_images_as_level   →  scripts/*.toonzscript → OpenToonz CLI → scene .tnz
-opentoonz_set_cells                →  scripts/*.toonzscript → OpenToonz CLI → scene .tnz
+opentoonz_set_cells / _exposure    →  scripts/*.toonzscript → OpenToonz CLI → scene .tnz
+opentoonz_scene_new / _set_scene_settings  →  .tnz XML patched in place (cameraRes/cameraSize/fps)
 opentoonz_render[_frame|_video]    →  tcomposer → render/*.png  (→ ffmpeg → *.mp4)
 ```
 
@@ -71,7 +72,25 @@ from `new Scene()` and silently discarded previous levels.)
 
 ### 8. Stale-frame clearing
 Renders clear frames matching their output prefix first, so a shorter re-render
-cannot leave orphans that inflate counts or leak into the MP4.
+cannot leave orphans that inflate counts or leak into the MP4. Level import does
+the same for drawings: a shorter sequence would otherwise leave higher-numbered
+frames that `loadLevel`'s `..` pattern loads back in. Sources being imported are
+spared, since drawing straight into `drawings/` is the normal workflow.
+
+### 9. Scene settings are patched into the `.tnz`, not set by API
+`Scene` exposes no `setCameraSize`/`setFrameCount` — resolution and fps are only
+reachable through the scene file, which is plain XML. `set_scene_settings` edits
+it in place. Crucially it also rewrites `cameraSize`: levels composite at 120 dpi,
+so the camera's *physical* size must scale with the resolution, or resizing a
+scene shrinks the art instead of re-framing it. A JS scene round-trip preserves
+the edit, so ordering relative to other tools does not matter.
+
+### 10. Levels are reused, never replaced
+There is no `removeLevel`/`clearCell`, and `loadLevel` errors on a name the scene
+already knows. So `import_level` looks the name up first and, if it exists, reuses
+that level and overwrites its drawings. This is what makes the
+draw → import → render → redraw loop work, and it pushes the tool surface toward
+"additive only" by design rather than by preference.
 
 ## Extension points
 

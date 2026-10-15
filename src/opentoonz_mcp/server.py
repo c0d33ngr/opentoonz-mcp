@@ -17,11 +17,13 @@ mcp = FastMCP(
     "opentoonz-mcp",
     instructions=(
         "Headless OpenToonz automation. Typical flow: opentoonz_create_workspace → "
-        "draw or import an image sequence as an animation level → opentoonz_set_cells "
-        "to time it on the xsheet → opentoonz_render_frame to look at the result → "
-        "opentoonz_render_video to produce an MP4. Everything runs through OpenToonz's "
-        "scripting CLI and the official tcomposer renderer; no GUI is required. "
-        "Use opentoonz_run_script as a generic escape hatch for the full JS API."
+        "draw or import an image sequence as an animation level → opentoonz_exposure "
+        "(or opentoonz_set_cells) to time it on the xsheet → opentoonz_render_frame to "
+        "look at the result → opentoonz_render_video to produce an MP4. Everything runs "
+        "through OpenToonz's scripting CLI and the official tcomposer renderer; no GUI "
+        "is required. opentoonz_scene_new and opentoonz_set_scene_settings change the "
+        "camera resolution. Use opentoonz_run_script as a generic escape hatch for the "
+        "full JS API."
     ),
     version=__version__,
 )
@@ -29,6 +31,19 @@ mcp = FastMCP(
 
 def _fail(exc: Exception) -> str:
     return f"ERROR [{type(exc).__name__}]: {exc}"
+
+
+def _format_exposure(pairs: list[tuple[int, int]]) -> str:
+    """Compress ``(row, fid)`` placements into runs, e.g. ``fid 1: rows 0-1``."""
+    runs: list[list[int]] = []
+    for row, fid in pairs:
+        if runs and runs[-1][2] == fid and runs[-1][1] + 1 == row:
+            runs[-1][1] = row
+        else:
+            runs.append([row, row, fid])
+    return ", ".join(
+        f"fid {fid}: row {first}" if first == last else f"fid {fid}: rows {first}-{last}" for first, last, fid in runs
+    )
 
 
 def _which_ffmpeg(ctx) -> str | None:
@@ -123,13 +138,50 @@ def opentoonz_list_workspaces() -> str:
 
 # -- scenes -------------------------------------------------------------------
 @mcp.tool()
-def opentoonz_scene_new(workspace: str, scene: str = "main") -> str:
-    """Create (or overwrite) an empty scene in a workspace."""
+def opentoonz_scene_new(
+    workspace: str,
+    scene: str = "main",
+    width: int | None = None,
+    height: int | None = None,
+    fps: int | None = None,
+) -> str:
+    """Create (or overwrite) an empty scene, optionally setting its resolution.
+
+    The default camera is 1920x1080. Levels composite 1:1 and centred, so draw
+    your art at the scene's size for full-frame output.
+    """
     try:
-        result = scenes.scene_new(get_context(), workspace, scene)
+        settings = scenes.scene_new(get_context(), workspace, scene, width=width, height=height, fps=fps)
     except OpentoonzMCPError as exc:
         return _fail(exc)
-    return f"OK: created scene '{scene}' ({result.duration:.1f}s)"
+    rate = f" @ {settings.fps}fps" if settings.fps else ""
+    return f"OK: created scene '{scene}' at {settings.width}x{settings.height}{rate}"
+
+
+@mcp.tool()
+def opentoonz_set_scene_settings(
+    workspace: str,
+    scene: str,
+    width: int | None = None,
+    height: int | None = None,
+    fps: int | None = None,
+) -> str:
+    """Change a scene's camera resolution and/or frame rate (e.g. 1080p -> 720p).
+
+    OpenToonz's scripting API has no setters for these, so the scene file's XML
+    is patched directly; later edits to the scene keep the new settings. `width`
+    and `height` may be given independently — the omitted one keeps its value.
+    Re-render after changing this, and draw new art at the new size.
+    """
+    try:
+        settings = scenes.set_scene_settings(get_context(), workspace, scene, width=width, height=height, fps=fps)
+    except OpentoonzMCPError as exc:
+        return _fail(exc)
+    changed = ", ".join(settings.changed) if settings.changed else "nothing (already set)"
+    return (
+        f"OK: scene '{scene}' is now {settings.width}x{settings.height} "
+        f"(camera {settings.camera_size}), fps={settings.fps}\nchanged: {changed}"
+    )
 
 
 @mcp.tool()
@@ -145,28 +197,38 @@ def opentoonz_import_images_as_level(
 
     Additive: an existing scene is loaded first, so you can call this repeatedly
     with different level_name/column to build a multi-level scene. Images are
-    converted to RGBA PNG named <level_name>.%04d.png. The default camera is
-    1920x1080 — draw at that size for full-frame output.
+    converted to RGBA PNG named <level_name>.%04d.png, and levels composite 1:1
+    and centred — draw at the scene's size (1920x1080 by default) for full-frame
+    output.
+
+    Re-importing the same level_name reuses that level and overwrites its
+    drawings, so you can iterate on art without the level being duplicated.
     """
     try:
-        result, copied = scenes.import_level(
-            get_context(), workspace, level_name, image_paths, scene, start_row, column
-        )
+        imported = scenes.import_level(get_context(), workspace, level_name, image_paths, scene, start_row, column)
     except OpentoonzMCPError as exc:
         return _fail(exc)
-    return f"OK: imported {len(copied)} frames as level '{level_name}' into '{scene}'\n" + result.summary(
-        out_tail=800, err_tail=600
+    verb = "reused" if imported.reused else "imported"
+    return (
+        f"OK: {verb} {len(imported.copied)} frames as level '{level_name}' "
+        f"({imported.frame_count} drawings) into '{scene}'\n" + imported.result.summary(out_tail=800, err_tail=600)
     )
 
 
 @mcp.tool()
-def opentoonz_scene_info(workspace: str, scene: str) -> str:
-    """Report a scene's frame/column counts, its levels, and its cell map."""
+def opentoonz_scene_info(workspace: str, scene: str, max_rows: int = scenes.DEFAULT_MAX_ROWS) -> str:
+    """Report a scene's frame/column counts, its levels, and its cell map.
+
+    The cell map is scanned row by row and stops at max_rows (default 1000);
+    the output says so explicitly when a scene is taller than that.
+    """
     try:
-        info = scenes.scene_info(get_context(), workspace, scene)
+        info = scenes.scene_info(get_context(), workspace, scene, max_rows=max_rows)
     except OpentoonzMCPError as exc:
         return _fail(exc)
     lines = [f"frames={info.frame_count} columns={info.column_count}"]
+    if info.cells_truncated:
+        lines.append(f"note: cell list truncated at max_rows={max_rows} (raise max_rows to see the rest)")
     for level in info.levels:
         lines.append(f"level: {level.name} type={level.type} frames={level.frame_count} path={level.path}")
     for cell in info.cells:
@@ -180,12 +242,40 @@ def opentoonz_set_cells(workspace: str, scene: str, placements: list[dict]) -> s
 
     placements: list of {"row": int, "col": int, "level": str, "fid": int|str}.
     Levels must already exist in the scene (see opentoonz_import_images_as_level).
+    For the common animation task of holding each drawing for N frames, use
+    opentoonz_exposure instead of computing rows yourself.
     """
     try:
         result = scenes.set_cells(get_context(), workspace, scene, placements)
     except OpentoonzMCPError as exc:
         return _fail(exc)
     return f"OK: placed {len(placements)} cells into '{scene}'\n" + result.summary(out_tail=400, err_tail=300)
+
+
+@mcp.tool()
+def opentoonz_exposure(
+    workspace: str,
+    scene: str,
+    level: str,
+    exposures: list[int],
+    start_row: int = 0,
+    column: int = 0,
+) -> str:
+    """Time a level's drawings on the xsheet by holding each one for N frames.
+
+    exposures is either a single hold for every drawing ([3] = hold all on 3s)
+    or one hold per drawing in order ([2, 4, 1]). Rows are contiguous, and the
+    scene's frame count follows what is placed. The level must already be in the
+    scene (see opentoonz_import_images_as_level).
+    """
+    try:
+        result, placements = scenes.set_exposure(get_context(), workspace, scene, level, exposures, start_row, column)
+    except OpentoonzMCPError as exc:
+        return _fail(exc)
+    return (
+        f"OK: timed {len(placements)} frames of '{level}' into '{scene}'\n"
+        f"{_format_exposure(placements)}\n" + result.summary(out_tail=300, err_tail=200)
+    )
 
 
 # -- drawing ------------------------------------------------------------------
@@ -201,9 +291,11 @@ def opentoonz_draw_frame(
 ) -> str:
     """Draw one RGBA frame with PIL primitives and save it as a level drawing.
 
-    ops: list of {"op": "rect|ellipse|line|polygon|polyline|text", ...} — see
-    docs/tools.md. Saved to <workspace>/drawings/<level_name>.<frame>.png, ready
-    for opentoonz_import_images_as_level.
+    ops: list of {"op": "rect|ellipse|line|polygon|polyline|text|image", ...} —
+    see docs/tools.md. The "image" op composites an existing PNG, so art made
+    elsewhere can join a drawn frame. Saved to
+    <workspace>/drawings/<level_name>.<frame>.png, ready for
+    opentoonz_import_images_as_level.
     """
     try:
         ws = workspace_mod.require(get_context(), workspace)

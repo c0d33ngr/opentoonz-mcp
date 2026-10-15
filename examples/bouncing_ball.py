@@ -42,8 +42,8 @@ def main() -> int:
         frames.append(str(path))
     print(f"drew {len(frames)} frames")
 
-    result, copied = scenes.import_level(ctx, "bouncing-ball", "ball", frames, "main")
-    print(f"imported {len(copied)} frames (ok={result.ok})")
+    imported = scenes.import_level(ctx, "bouncing-ball", "ball", frames, "main")
+    print(f"imported {len(imported.copied)} frames (ok={imported.result.ok})")
 
     look = render_mod.render_frame(ctx, "bouncing-ball", "main", frame=1)
     print("look:", look.frames[0] if look.frames else "FAILED")

@@ -35,11 +35,43 @@ Check, in order, the runtime-notes facts:
 The tcomposer farm log (`<isolated HOME>/.config/OpenToonz/stuff/toonzfarm/tcomposer.log`)
 has the details; `opentoonz_render` also returns the captured log on failure.
 
-## The rendered frame is black / the art is a small box
+## The rendered frame is black
 
-`newLevel`/`setFrame` are in-memory (black), or the art is not 1920×1080. The
-default camera is 1920×1080 and composites levels 1:1 and centred, so generate art
-at that size for full-frame output.
+`newLevel`/`setFrame` are in-memory: a saved `.tnz` that references them renders
+black because the level files were never written. Import real files with
+`opentoonz_import_images_as_level` instead.
+
+## The art is a small box in the middle of the frame
+
+The art is smaller than the camera. Levels composite **1:1 in output pixels**, so
+draw at the scene's resolution — create the scene with
+`opentoonz_scene_new(width=..., height=...)`, or check the current size with
+`opentoonz_doctor`/the scene file.
+
+If you resized the scene and the art *shrank*, you are on a pre-0.2.0 build: the
+camera's **physical** size has to scale with the resolution (640×360 art in a
+640×360 frame, with `cameraSize` left at the 16×9 default, rendered as a 213×120
+box). `opentoonz_set_scene_settings` in 0.2.0+ rewrites `cameraSize` too.
+
+## An SVG / vector level renders nothing
+
+Expected, not a bug: vector levels load (`type=Vector`) but rasterise to nothing
+headlessly. Convert the SVG to PNG first — `opentoonz_import_images_as_level`
+rejects `.svg` input with that explanation. See runtime-notes fact 23.
+
+## `level.setFrame()` seems to do nothing
+
+Correct — edits made through `setFrame` on a loaded level never reach the
+renderer, even after `scene.save()`. Only the files on disk matter, so repaint
+the level's PNGs and re-import them with `opentoonz_import_images_as_level`
+(re-importing the same level name is supported).
+
+## A re-import shrank a level but the scene still has extra cells
+
+OpenToonz has no way to delete a cell. Re-importing a *shorter* sequence removes
+the orphaned drawing files and overwrites the cells it places, but any cells
+beyond the new length stay in the xsheet. Use a fresh level name or a fresh scene
+when a shot gets shorter.
 
 ## "ffmpeg not found"
 

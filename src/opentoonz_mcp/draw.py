@@ -13,6 +13,10 @@ dicts ("ops"), which is what the MCP tool accepts:
     {"op": "polygon", "points": [[x, y], ...], "fill": "#...", "outline": "#..."}
     {"op": "polyline","points": [[x, y], ...], "fill": "#...", "width": 3}
     {"op": "text",    "xy": [x, y], "text": "Hi", "fill": "#fff", "size": 64, "anchor": "la"}
+    {"op": "image",   "path": "/abs/art.png", "xy": [x, y], "size": [w, h], "opacity": 0.5}
+
+The ``image`` op composites an existing RGBA PNG (optionally resized), which is
+how art made elsewhere joins a drawn frame.
 
 Colours accept ``#rgb``, ``#rrggbb``, ``#rrggbbaa``, or ``[r, g, b(, a)]``.
 """
@@ -33,6 +37,9 @@ Color = tuple[int, int, int, int]
 DEFAULT_WIDTH = 1920
 DEFAULT_HEIGHT = 1080
 DEFAULT_BACKGROUND = "#181a2e"
+
+#: ``Frame.image`` is the PIL surface, so the ``image`` op needs a real name.
+_OP_ALIASES = {"image": "paste_image"}
 
 _FONT_CANDIDATES = (
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -143,13 +150,48 @@ class Frame:
         self.draw.text(tuple(xy), str(text), fill=parse_color(fill), font=_font(int(size)), anchor=anchor)
         return self
 
+    def paste_image(
+        self,
+        path: str | Path,
+        xy: Sequence[float] = (0, 0),
+        size: Sequence[float] | None = None,
+        opacity: float | None = None,
+    ) -> Frame:
+        """Composite an existing RGBA PNG onto the frame at ``xy``.
+
+        ``size`` rescales it to ``[width, height]``; ``opacity`` (0..1) fades it.
+        Anything outside the frame is clipped.
+        """
+        source = Path(path)
+        if not source.is_file():
+            raise OpentoonzMCPError(f"Image not found: {path}")
+        with Image.open(source) as opened:
+            overlay = opened.convert("RGBA")
+        if size is not None:
+            width, height = (int(size[0]), int(size[1]))
+            if width <= 0 or height <= 0:
+                raise OpentoonzMCPError(f"size must be positive, got {size!r}")
+            overlay = overlay.resize((width, height), Image.LANCZOS)
+        if opacity is not None:
+            factor = float(opacity)
+            if not 0.0 <= factor <= 1.0:
+                raise OpentoonzMCPError(f"opacity must be between 0 and 1, got {opacity!r}")
+            overlay.putalpha(overlay.getchannel("A").point(lambda value: int(value * factor)))
+        # Composite into a same-size layer so alpha_composite can do proper
+        # "over" maths (a masked paste would halve the alpha of faded art), then
+        # copy back in place — self.draw holds a reference to self.image.
+        layer = Image.new("RGBA", self.image.size, (0, 0, 0, 0))
+        layer.paste(overlay, (int(xy[0]), int(xy[1])))
+        self.image.paste(Image.alpha_composite(self.image, layer))
+        return self
+
     # -- composition --------------------------------------------------------
     def apply(self, ops: Iterable[dict[str, Any]]) -> Frame:
         """Apply a list of op dicts (see module docstring)."""
         for op in ops:
             if not isinstance(op, dict) or "op" not in op:
                 raise OpentoonzMCPError(f"Each drawing op must be a dict with an 'op' key, got {op!r}")
-            name = str(op["op"])
+            name = _OP_ALIASES.get(str(op["op"]), str(op["op"]))
             method = getattr(self, name, None)
             if method is None or name.startswith("_"):
                 raise OpentoonzMCPError(f"Unknown drawing op: {name!r}")
