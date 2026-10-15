@@ -6,10 +6,10 @@
 
 It works by running OpenToonz's **built-in scripting engine** in CLI mode and the official **`tcomposer`** headless renderer, then exposing the useful primitives as MCP tools.
 
-<!-- Replace with real badges after publishing -->
-![CI](https://img.shields.io/badge/ci-github_actions-blue)
-![License: MIT](https://img.shields.io/badge/license-MIT-green)
-![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+[![CI](https://github.com/c0d33ngr/opentoonz-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/c0d33ngr/opentoonz-mcp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/c0d33ngr/opentoonz-mcp)](https://github.com/c0d33ngr/opentoonz-mcp/blob/main/LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://github.com/c0d33ngr/opentoonz-mcp)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
 ---
 
