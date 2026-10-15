@@ -1,0 +1,22 @@
+# NOTICE
+
+opentoonz-mcp is an independent, unofficial project. It is **not** affiliated
+with or endorsed by the OpenToonz project or DWANGO Co., Ltd.
+
+## Third-party components
+
+- **OpenToonz** — the animation software this project automates. OpenToonz is
+  distributed under the **BSD 3-Clause License**.
+  Source: https://github.com/opentoonz/opentoonz
+
+opentoonz-mcp does **not** bundle, redistribute, or modify OpenToonz. It only
+invokes a locally installed OpenToonz runtime (its scripting CLI and the
+`tcomposer` renderer) through the official, documented interfaces. You are
+responsible for obtaining OpenToonz in accordance with its license.
+
+## Python dependencies
+
+- **fastmcp** — MIT License
+- **Pillow** — HPND License
+
+See `pyproject.toml` for the full dependency list.

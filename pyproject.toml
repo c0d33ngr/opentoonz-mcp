@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "opentoonz-mcp"
+version = "0.1.0"
+description = "Headless OpenToonz automation for AI agents, exposed as an MCP server."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "opentoonz-mcp contributors" }]
+keywords = ["opentoonz", "mcp", "model-context-protocol", "animation", "automation", "ai", "render"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Multimedia :: Graphics",
+]
+dependencies = [
+  "fastmcp>=2.0",
+  "pillow>=9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-timeout>=2.3",
+  "ruff>=0.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/c0d33ngr/opentoonz-mcp"
+Issues = "https://github.com/c0d33ngr/opentoonz-mcp/issues"
+
+[project.scripts]
+opentoonz-mcp = "opentoonz_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/opentoonz_mcp"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+src = ["src", "tests"]
+exclude = ["reference"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
+markers = [
+  "e2e: requires a real OpenToonz runtime (OpenToonz + tcomposer)",
+]

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Troubleshooting guide
+    url: https://github.com/c0d33ngr/opentoonz-mcp/blob/main/docs/troubleshooting.md
+    about: Common runtime issues (GUI-mode hangs, black renders, tcomposer exceptions).
+  - name: Runtime notes
+    url: https://github.com/c0d33ngr/opentoonz-mcp/blob/main/docs/runtime-notes.md
+    about: The hard-won OpenToonz behaviours this project relies on.

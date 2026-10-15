@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local OpenToonz runtime (extracted AppImage) — never committed
+runtime/
+
+# Local workspaces and render output
+workspaces/
+*.mp4
+
+# Local tool data
+.opentoonz-mcp/
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store

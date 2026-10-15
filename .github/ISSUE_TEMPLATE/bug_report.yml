@@ -1,0 +1,46 @@
+name: Bug report
+description: Something is not working as expected
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check [docs/troubleshooting.md](https://github.com/c0d33ngr/opentoonz-mcp/blob/main/docs/troubleshooting.md)
+        first — GUI-mode hangs and black renders are covered there.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what actually happened?
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: opentoonz_doctor output
+      description: Paste the full output of the opentoonz_doctor tool.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: ot-version
+    attributes:
+      label: OpenToonz version
+      placeholder: "e.g. v1.8.0"
+  - type: input
+    id: mcp-version
+    attributes:
+      label: opentoonz-mcp version
+      placeholder: "e.g. 0.1.0"
+  - type: input
+    id: os
+    attributes:
+      label: OS / platform
+      placeholder: "e.g. Ubuntu 24.04"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: The tool's returned text, and the tcomposer farm log if relevant.
+      render: shell
