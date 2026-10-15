@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import argparse
 import shutil
 from pathlib import Path
 
 from fastmcp import FastMCP
 from PIL import Image
 
-from . import __version__, bridge, draw, scenes
+from . import __version__, bootstrap, bridge, draw, scenes
 from . import render as render_mod
 from . import workspace as workspace_mod
 from .context import get_context
@@ -289,15 +290,21 @@ def opentoonz_camera_move(workspace: str, scene: str, keyframes: list[dict]) -> 
     """Move the scene's camera over the shot — pan, zoom, and rotate.
 
     keyframes: list of {"frame": int, "x": px, "y": px, "zoom": factor,
-    "rotation": degrees}. Only "frame" is required; the rest default to no
-    movement (x=0, y=0, zoom=1, rotation=0). "frame" is a 1-based shot frame —
-    the same numbering as opentoonz_render_frame.
+    "rotation": degrees, "ease": bool}. Only "frame" is required; the rest
+    default to no movement (x=0, y=0, zoom=1, rotation=0, ease=false). "frame" is
+    a 1-based shot frame — the same numbering as opentoonz_render_frame.
 
     x/y are the camera's position in scene pixels: +x pans the view right and +y
     pans it up, so the artwork moves the opposite way. zoom is a magnification
     (2 renders the art twice as large), and rotation is in degrees, clockwise on
-    screen, about the frame centre. OpenToonz interpolates linearly between
-    keyframes.
+    screen, about the frame centre.
+
+    ease=true makes the camera glide out of that keyframe and into the next
+    instead of moving at a constant speed — it eases the segment starting there,
+    symmetrically, across every channel. Each segment eases on its own, so a run
+    of eased keyframes settles at each pose; ease only the segments you want
+    softened. The flag on the last keyframe does nothing, so adding ease=true to
+    every keyframe eases the whole move.
 
     The move is stored in the scene file as the camera's animation channels, so
     it survives later edits and stays editable in OpenToonz's Function Editor.
@@ -307,10 +314,11 @@ def opentoonz_camera_move(workspace: str, scene: str, keyframes: list[dict]) -> 
         moved = scenes.camera_move(get_context(), workspace, scene, keyframes)
     except OpentoonzMCPError as exc:
         return _fail(exc)
+    eased = f", {moved.eased_segments} eased" if moved.eased_segments else ""
     return (
         f"OK: camera move over {len(moved.keyframes)} keyframes, frames "
         f"{moved.first_frame}-{moved.last_frame} in '{scene}'\n"
-        f"channels: {', '.join(moved.channels)} at {moved.px_per_inch:g} px/unit"
+        f"channels: {', '.join(moved.channels)} at {moved.px_per_inch:g} px/unit{eased}"
     )
 
 
@@ -480,8 +488,27 @@ def opentoonz_run_script(workspace: str, code: str, timeout: int = 90) -> str:
     return result.summary()
 
 
-def main() -> None:
-    """Console entry point."""
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="opentoonz-mcp",
+        description=(
+            "Headless OpenToonz automation over MCP. With no subcommand it runs the MCP "
+            "server on stdio, which is what an MCP client expects."
+        ),
+    )
+    subparsers = parser.add_subparsers(dest="command")
+    subparsers.add_parser("serve", help="run the MCP server on stdio (the default)")
+    bootstrap.add_arguments(
+        subparsers.add_parser("fetch-runtime", help="extract an OpenToonz AppImage into a reusable runtime")
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Console entry point: run the MCP server, or a one-off subcommand."""
+    args = _build_parser().parse_args(argv)
+    if args.command == "fetch-runtime":
+        raise SystemExit(bootstrap.run(args))
     mcp.run()
 
 

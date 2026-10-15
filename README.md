@@ -18,6 +18,13 @@ the xsheet, the static ones held with `opentoonz_exposure`, and composited by
 OpenToonz's own renderer. Reproduce it with
 [`examples/demo_reel.py`](examples/demo_reel.py).</sub>
 
+![A static scene pushed in on by an eased camera move: the camera starts wide, then glides into a close-up, with the markers visibly slowing at the start and end of the move](docs/camera.gif)
+
+<sub>The camera moving over a *static* scene — pan and zoom written into the
+scene's own camera channels, with the push-in eased so it settles instead of
+stopping dead. Reproduce it with
+[`examples/camera_move.py`](examples/camera_move.py).</sub>
+
 ---
 
 ## Why
@@ -66,7 +73,12 @@ uv tool install .
 pip install -e ".[dev]"
 ```
 
-The `opentoonz-mcp` console script starts the stdio server.
+The `opentoonz-mcp` console script starts the stdio server. It also bootstraps the
+OpenToonz runtime, so an installed copy needs no clone:
+
+```bash
+opentoonz-mcp fetch-runtime --appimage ~/Downloads/OpenToonz.AppImage
+```
 
 ## Configure your MCP client
 
@@ -109,6 +121,7 @@ Ask your agent to:
 3. `opentoonz_import_images_as_level(...)` — bring them in as a level
 4. `opentoonz_exposure(...)` — hold each drawing for N frames (`[2]` = on 2s)
 5. `opentoonz_camera_move(...)` — pan, zoom or rotate the camera over the shot
+   (add `"ease": true` to a keyframe to soften that part of the move)
 6. `opentoonz_render_frame(..., max_width=960)` — look at the result cheaply
 7. `opentoonz_render_video(...)` — get an MP4 (or `opentoonz_render_gif` for a GIF)
 
@@ -121,6 +134,7 @@ Or run the examples end-to-end:
 ```bash
 OPENTOONZ_RUNTIME=/path/to/squashfs-root python examples/bouncing_ball.py  # one level → MP4
 OPENTOONZ_RUNTIME=/path/to/squashfs-root python examples/demo_reel.py     # three levels → MP4 + the GIF above
+OPENTOONZ_RUNTIME=/path/to/squashfs-root python examples/camera_move.py   # eased camera move → GIF
 ```
 
 ## Tools
@@ -137,7 +151,7 @@ OPENTOONZ_RUNTIME=/path/to/squashfs-root python examples/demo_reel.py     # thre
 | `opentoonz_scene_info` | Frames/columns/levels/cells |
 | `opentoonz_set_cells` | Place cells on the xsheet |
 | `opentoonz_exposure` | Hold each drawing for N frames (animate on 1s/2s/3s) |
-| `opentoonz_camera_move` | Animate the camera (pan / zoom / rotate), editably |
+| `opentoonz_camera_move` | Animate the camera (pan / zoom / rotate), with per-segment easing |
 | `opentoonz_draw_frame` | Draw one RGBA frame (PIL primitives + image compositing) |
 | `opentoonz_draw_frames` | Draw a whole sequence |
 | `opentoonz_render_frame` | Render one frame (the "look"), optionally downscaled |
@@ -155,8 +169,9 @@ OpenToonz's JS API is a **subset** of the GUI, and some of the boundaries are sh
 - FX graphs, palette editing, camera **splines**, auto-inbetweening, and audio
   tracks are unreachable. There is also **no way to delete** a level or a cell,
   which is why level import *reuses* an existing level instead of replacing it.
-  Camera *moves* (pan/zoom/rotate) do work — they are written into the camera's
-  stage-object channels, which OpenToonz renders and keeps editable.
+  Camera *moves* (pan/zoom/rotate) do work, including **eased** segments — they
+  are written into the camera's stage-object channels, which OpenToonz renders and
+  keeps editable.
 - **Vector (SVG) levels import but render blank** headlessly, and `setFrame()` on
   a loaded level never reaches the renderer. Raster PNG levels are the supported
   path; passing an SVG to the import tool is rejected with that explanation.
@@ -165,7 +180,8 @@ OpenToonz's JS API is a **subset** of the GUI, and some of the boundaries are sh
   art drawn at the scene's size fills the frame.
 - Rendering needs a working `tcomposer`; `Renderer.renderFrame` **deadlocks** in
   CLI mode and is intentionally avoided.
-- Exercised on **Linux** only so far.
+- Exercised on **Linux** only so far. Workspace locking uses `fcntl`; on Windows
+  it degrades to a no-op (and warns once) rather than failing.
 
 Workarounds and the full picture: **[docs/runtime-notes.md](docs/runtime-notes.md)**.
 
@@ -179,7 +195,8 @@ See **[docs/troubleshooting.md](docs/troubleshooting.md)** — it covers the com
 pip install -e ".[dev]"
 pytest -m "not e2e"      # fast unit tests
 pytest -m e2e            # requires a runtime (OPENTOONZ_RUNTIME=...)
-ruff check .
+ruff check . && ruff format --check .
+python -m build          # packaging check
 ```
 
 Architecture notes live in **[docs/architecture.md](docs/architecture.md)**.

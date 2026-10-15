@@ -123,10 +123,23 @@ and the official [ToonzScript reference](https://opentoonz.readthedocs.io/en/lat
     physical camera, a pan's on-screen size is multiplied by the zoom.
 30. **Audio columns are unreachable** from the scripting API, so a soundtrack is
     always muxed in from an external file with ffmpeg (`-c:a aac -shortest`).
+31. **Easing is writable, and its parameter is a length, not a speed.** In an
+    `<E>` (EaseInOut) keyframe, `m_speedOut.x` is the ease-in *length in frames*,
+    and `m_speedIn.x` — read only from the *next* keyframe's `<prev>` child — is
+    the (negative) ease-out length. Both zero means no easing, which renders
+    **exactly like linear**, so an ease that appears to do nothing is a zero
+    length rather than an ignored tag. A segment's interpolation is chosen by the
+    type of the keyframe that *starts* it, and OpenToonz recomputes each
+    keyframe's `prevType` from its neighbour on load — which is why a `<prev>`
+    handle survives a save whenever the segment before it is `<E>`. Verified by
+    measuring a patched move at the **quartiles**: ease and linear agree at the
+    midpoint (`smoothstep(0.5) = 0.5`), so a midpoint sample cannot tell them
+    apart.
 
 `scripts/probe_api.py` re-runs the scripting-API survey against an installed
-runtime, and `scripts/probe_camera.py` re-establishes the camera facts above, so
-a version bump can be checked rather than guessed at.
+runtime, and `scripts/probe_camera.py` re-establishes the camera facts above
+(including that easing renders, and survives a save), so a version bump can be
+checked rather than guessed at.
 
 ## Workarounds for the gaps
 
@@ -138,6 +151,7 @@ a version bump can be checked rather than guessed at.
   overwrite the drawings, or start a fresh scene (fact 20).
 - **FX** → pre-bake in the image pipeline (PIL/ffmpeg).
 - **Camera moves** → patch the camera's channels in the `.tnz`
-  (`opentoonz_camera_move`), which stays editable in the GUI (facts 27–29).
+  (`opentoonz_camera_move`), which stays editable in the GUI. Easing is written
+  as a real `<E>` curve, so it too stays editable (facts 27–29, 31).
 - **Audio** → mux with ffmpeg at the end (`opentoonz_render_video(audio=...)`),
   since audio columns are unreachable (fact 30).

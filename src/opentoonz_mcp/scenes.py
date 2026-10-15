@@ -263,8 +263,11 @@ CAMERA_CHANNELS = ("x", "y", "sc", "rot")
 #: written at all, so a pan-only move does not also freeze the zoom.
 _NEUTRAL_CHANNEL = {"x": 0.0, "y": 0.0, "sc": 1.0, "rot": 0.0}
 
-#: Keyframe interpolation code for a linear segment (see TDoubleKeyframe::Type).
+#: Keyframe interpolation codes (see TDoubleKeyframe::Type in OpenToonz).
+#: ``L`` interpolates linearly; ``E`` (EaseInOut) eases, using a length in
+#: frames rather than a speed.
 _LINEAR = "L"
+_EASE = "E"
 
 #: The default camera's stage object. Scenes have one camera; OpenToonz names it
 #: ``Camera1`` in the xsheet's pegbar list.
@@ -292,13 +295,35 @@ def _px_per_inch(text: str) -> float:
 
 @dataclass(frozen=True)
 class CameraKey:
-    """One camera keyframe, in the units the tool exposes."""
+    """One camera keyframe, in the units the tool exposes.
+
+    ``ease`` eases the segment that *starts* here: the camera glides out of this
+    pose and into the next instead of moving at a constant speed.
+    """
 
     frame: int
     x: float = 0.0
     y: float = 0.0
     zoom: float = 1.0
     rotation: float = 0.0
+    ease: bool = False
+
+
+@dataclass(frozen=True)
+class _ChannelKey:
+    """One keyframe of one channel, in the scene's own units.
+
+    ``ease_in``/``ease_out`` are ease *lengths in frames*, not speeds — that is
+    what OpenToonz's EaseInOut interpolator takes. The segment arriving at this
+    keyframe eases in over ``ease_in`` frames and the one leaving eases out over
+    ``ease_out`` frames. Zero means no easing, which renders exactly like linear.
+    """
+
+    row: int
+    value: float
+    ease: bool = False
+    ease_in: float = 0.0
+    ease_out: float = 0.0
 
 
 @dataclass
@@ -310,6 +335,7 @@ class CameraMove:
     px_per_inch: float
     first_frame: int
     last_frame: int
+    eased_segments: int = 0
 
 
 def _camera_number(item: dict, index: int, name: str, default: float) -> float:
@@ -342,6 +368,9 @@ def _normalise_camera_keys(raw: object) -> list[CameraKey]:
         zoom = _camera_number(item, index, "zoom", 1.0)
         if zoom <= 0:
             raise OpentoonzMCPError(f"keyframe {index}: zoom must be greater than 0 (1 = unchanged), got {zoom}")
+        ease = item.get("ease", False)
+        if not isinstance(ease, bool):
+            raise OpentoonzMCPError(f"keyframe {index}: 'ease' must be true or false, got {ease!r}")
         keys.append(
             CameraKey(
                 frame=int(frame),
@@ -349,6 +378,7 @@ def _normalise_camera_keys(raw: object) -> list[CameraKey]:
                 y=_camera_number(item, index, "y", 0.0),
                 zoom=zoom,
                 rotation=_camera_number(item, index, "rotation", 0.0),
+                ease=ease,
             )
         )
 
@@ -359,40 +389,87 @@ def _normalise_camera_keys(raw: object) -> list[CameraKey]:
     return keys
 
 
-def _camera_channels(keys: list[CameraKey], px_per_inch: float) -> dict[str, list[tuple[int, float]]]:
+def _ease_lengths(keys: list[CameraKey]) -> tuple[list[float], list[float]]:
+    """Per-keyframe ``(ease_in, ease_out)`` lengths, in frames.
+
+    The flag on a keyframe eases the segment that *starts* there, and it does so
+    symmetrically: each side of the segment gets half its length. The last
+    keyframe has no outgoing segment, so its flag is ignored rather than
+    rejected — stamping ``ease`` on every keyframe therefore eases the whole move.
+    """
+    ease_in = [0.0] * len(keys)
+    ease_out = [0.0] * len(keys)
+    for index in range(len(keys) - 1):
+        if not keys[index].ease:
+            continue
+        half = (keys[index + 1].frame - keys[index].frame) / 2.0
+        ease_out[index] = half
+        ease_in[index + 1] = half
+    return ease_in, ease_out
+
+
+def _camera_channels(keys: list[CameraKey], px_per_inch: float) -> dict[str, list[_ChannelKey]]:
     """Convert tool units to scene channels, dropping channels left at neutral.
 
     ``x``/``y`` become the camera's physical position (pixels / ``px_per_inch``)
     and ``zoom`` becomes a scale, which is the inverse: OpenToonz renders the
     camera's view, so halving the scale doubles the artwork on screen.
     """
+    ease_in, ease_out = _ease_lengths(keys)
     converted = {
-        "x": [(key.frame, key.x / px_per_inch) for key in keys],
-        "y": [(key.frame, key.y / px_per_inch) for key in keys],
-        "sc": [(key.frame, 1.0 / key.zoom) for key in keys],
-        "rot": [(key.frame, key.rotation) for key in keys],
+        "x": [key.x / px_per_inch for key in keys],
+        "y": [key.y / px_per_inch for key in keys],
+        "sc": [1.0 / key.zoom for key in keys],
+        "rot": [key.rotation for key in keys],
     }
     # Channels are 1-based here (the tool's frame numbering); the xsheet is
-    # 0-based, so shift once, at the point of writing.
-    shifted = {tag: [(frame - 1, value) for frame, value in rows] for tag, rows in converted.items()}
-    return {tag: rows for tag, rows in shifted.items() if any(value != _NEUTRAL_CHANNEL[tag] for _, value in rows)}
+    # 0-based, so shift once, at the point of writing. A keyframe only eases
+    # when it has a segment to ease, so the tag never lands on the last one.
+    channels: dict[str, list[_ChannelKey]] = {}
+    for tag, values in converted.items():
+        if all(value == _NEUTRAL_CHANNEL[tag] for value in values):
+            continue
+        channels[tag] = [
+            _ChannelKey(
+                row=key.frame - 1,
+                value=value,
+                ease=key.ease and index < len(keys) - 1,
+                ease_in=ease_in[index],
+                ease_out=ease_out[index],
+            )
+            for index, (key, value) in enumerate(zip(keys, values, strict=True))
+        ]
+    return channels
 
 
-def _channel_xml(tag: str, rows: list[tuple[int, float]], indent: str) -> str:
-    """One animated channel, laid out the way OpenToonz writes it."""
+def _channel_xml(tag: str, rows: list[_ChannelKey], indent: str) -> str:
+    """One animated channel, laid out the way OpenToonz writes it.
+
+    An eased keyframe carries an extra ease length, and the ease *into* a
+    keyframe is stored in its ``<prev>`` child — that is where OpenToonz reads
+    the incoming handle from, so it has to be written there rather than on the
+    keyframe the segment starts from.
+    """
     lines = [
         f"{indent}<{tag}>",
         f"{indent}  <default>",
-        f"{indent}    {_format_length(rows[0][1])} ",
+        f"{indent}    {_format_length(rows[0].value)} ",
         f"{indent}  </default>",
         f"{indent}  <keyframes>",
     ]
-    for frame, value in rows:
-        lines += [
-            f"{indent}    <{_LINEAR}>",
-            f"{indent}      {_format_length(frame)} {_format_length(value)} ",
-            f"{indent}    </{_LINEAR}>",
-        ]
+    for row in rows:
+        kind = _EASE if row.ease else _LINEAR
+        body = f"{_format_length(row.row)} {_format_length(row.value)}"
+        if row.ease:
+            body += f" {_format_length(row.ease_out)}"
+        lines.append(f"{indent}    <{kind}>")
+        if row.ease_in:
+            lines += [
+                f"{indent}      <prev>",
+                f"{indent}        {_format_length(row.value)} {_format_length(-row.ease_in)} ",
+                f"{indent}      </prev>",
+            ]
+        lines += [f"{indent}      {body} ", f"{indent}    </{kind}>"]
     lines += [f"{indent}  </keyframes>", f"{indent}</{tag}>"]
     return "\n".join(lines)
 
@@ -400,7 +477,7 @@ def _channel_xml(tag: str, rows: list[tuple[int, float]], indent: str) -> str:
 def _patch_pegbar(
     text: str,
     pegbar_id: str,
-    channels: dict[str, list[tuple[int, float]]],
+    channels: dict[str, list[_ChannelKey]],
     clear: tuple[str, ...] = (),
 ) -> str:
     """Rewrite ``channels`` inside a stage object, leaving everything else alone.
@@ -447,12 +524,20 @@ def camera_move(
     """Move the scene's camera over time: pan, zoom, and rotate.
 
     Each keyframe is ``{"frame": int, "x": px, "y": px, "zoom": factor,
-    "rotation": degrees}``; only ``frame`` is required. ``frame`` is a 1-based
-    shot frame (the same numbering as ``render_frame``). ``x``/``y`` are the
-    camera's position in scene pixels (+x pans the view right, +y up, so the art
-    moves the other way), ``zoom`` is a magnification (2 = twice as large) and
-    ``rotation`` is in degrees, clockwise on screen, about the frame centre.
-    OpenToonz interpolates linearly between keyframes.
+    "rotation": degrees, "ease": bool}``; only ``frame`` is required. ``frame``
+    is a 1-based shot frame (the same numbering as ``render_frame``). ``x``/``y``
+    are the camera's position in scene pixels (+x pans the view right, +y up, so
+    the art moves the other way), ``zoom`` is a magnification (2 = twice as
+    large) and ``rotation`` is in degrees, clockwise on screen, about the frame
+    centre.
+
+    ``ease`` eases the segment that starts at that keyframe: the camera glides
+    out of the pose and into the next one instead of moving at a constant speed.
+    Easing is symmetric, over half the segment at each end, and applies to every
+    channel at once. Because each segment is eased on its own, a run of eased
+    keyframes settles at each pose; ease only the segments you want softened.
+    The flag on the last keyframe has no segment to ease, so it is ignored —
+    stamping ``ease`` on every keyframe eases the whole move.
 
     The move is written into the ``.tnz`` as the camera stage object's channels,
     so it survives later edits and stays editable in OpenToonz. Only channels
@@ -479,6 +564,7 @@ def camera_move(
         px_per_inch=px_per_inch,
         first_frame=keys[0].frame,
         last_frame=keys[-1].frame,
+        eased_segments=sum(1 for key in keys[:-1] if key.ease),
     )
 
 

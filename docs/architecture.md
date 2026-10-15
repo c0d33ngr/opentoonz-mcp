@@ -12,6 +12,7 @@ src/opentoonz_mcp/
 ├── draw.py        PIL frame authoring (RGBA PNG frames + op schema)
 ├── scenes.py      Scene create/resize, camera moves, inspect, level import/reuse, cell & exposure timing
 ├── render.py      tcomposer rendering + ffmpeg muxing (MP4, GIF)
+├── bootstrap.py   `fetch-runtime`: extract an OpenToonz AppImage into a runtime
 └── server.py      FastMCP tool definitions (thin wrappers over the above)
 ```
 
@@ -97,10 +98,11 @@ draw → import → render → redraw loop work, and it pushes the tool surface 
 There is no camera in the JS API — not a setter, not even a `Camera` object. In
 the scene XML the camera is a *stage object*: `<pegbar id="Camera1">` in the
 xsheet's `<pegbars>`, with the same kind of channels as any column's pegbar
-(`x`, `y`, `sc`, `rot`, ...). `camera_move` writes linear keyframes into those
-channels. OpenToonz renders them and preserves them on save, so the result is a
-genuine camera move that stays editable in the Function Editor — a *bake* into
-the level frames was the fallback plan and was not needed.
+(`x`, `y`, `sc`, `rot`, ...). `camera_move` writes keyframes into those channels:
+linear by default, or an eased (`<E>`) segment when a keyframe asks for one.
+OpenToonz renders them and preserves them on save, so the result is a genuine
+camera move that stays editable in the Function Editor — a *bake* into the level
+frames was the fallback plan and was not needed.
 `scripts/probe_camera.py` re-establishes the facts it depends on.
 
 ### 12. One workspace, one writer
@@ -111,7 +113,9 @@ Every scene and render operation therefore runs under a re-entrant `flock` on
 callers get it too). Re-entrancy matters because operations legitimately nest
 (`set_exposure` → `set_cells`, `render_video` → `render_frames`). The lock is
 advisory, released on process death, and a busy workspace times out with a clear
-message instead of hanging.
+message instead of hanging. Where `fcntl` is unavailable (Windows) there is
+nothing to lock with, so the lock degrades to a no-op — but it warns once, rather
+than letting concurrent edits be lost in silence.
 
 ## Extension points
 

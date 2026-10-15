@@ -10,6 +10,9 @@ venv/
 .ruff_cache/
 .mypy_cache/
 
+# uv's lockfile: CI installs from pyproject floors, so it pins nothing that ships
+uv.lock
+
 # Local OpenToonz runtime (extracted AppImage) — never committed
 runtime/
 

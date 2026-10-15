@@ -452,8 +452,9 @@ def test_camera_channels_convert_units_and_drop_neutral_channels():
     keys = scenes_mod._normalise_camera_keys([{"frame": 1, "x": 0}, {"frame": 25, "x": 120, "zoom": 4}])
     channels = scenes_mod._camera_channels(keys, 120.0)
     # 1-based tool frames become 0-based xsheet rows; 120 px is 1 scene unit.
-    assert channels["x"] == [(0, 0.0), (24, 1.0)]
-    assert channels["sc"] == [(0, 1.0), (24, 0.25)]
+    assert [(row.row, row.value) for row in channels["x"]] == [(0, 0.0), (24, 1.0)]
+    assert [(row.row, row.value) for row in channels["sc"]] == [(0, 1.0), (24, 0.25)]
+    assert all(row.ease is False for row in channels["x"])
     assert "y" not in channels
     assert "rot" not in channels
 
@@ -461,6 +462,53 @@ def test_camera_channels_convert_units_and_drop_neutral_channels():
 def test_camera_channels_neutral_move_is_empty():
     keys = scenes_mod._normalise_camera_keys([{"frame": 1}, {"frame": 24, "zoom": 1}])
     assert scenes_mod._camera_channels(keys, 120.0) == {}
+
+
+def test_camera_ease_is_symmetric_over_half_the_segment_each_side():
+    keys = scenes_mod._normalise_camera_keys([{"frame": 1, "x": 0, "ease": True}, {"frame": 13, "x": 120}])
+    ease_in, ease_out = scenes_mod._ease_lengths(keys)
+    # a 12-frame segment gets 6 frames of ease at each end
+    assert (ease_in, ease_out) == ([0.0, 6.0], [6.0, 0.0])
+
+
+def test_camera_ease_on_the_last_keyframe_is_ignored():
+    """It has no segment to ease — which is what lets ease be stamped everywhere."""
+    keys = scenes_mod._normalise_camera_keys(
+        [{"frame": 1, "x": 0, "ease": True}, {"frame": 13, "x": 120, "ease": True}]
+    )
+    assert scenes_mod._ease_lengths(keys) == ([0.0, 6.0], [6.0, 0.0])
+
+
+def test_camera_keys_reject_a_non_boolean_ease():
+    with pytest.raises(OpentoonzMCPError, match="ease"):
+        scenes_mod._normalise_camera_keys([{"frame": 1, "ease": "yes"}])
+
+
+def test_camera_move_writes_ease_lengths_and_the_prev_handle(context):
+    """Easing is an <E> tag carrying a length in frames, plus a <prev> handle.
+
+    OpenToonz reads the ease *into* a keyframe from that keyframe's own <prev>
+    child, so the ease-out cannot be stored on the keyframe the segment starts
+    from — it has to be written on the one it arrives at.
+    """
+    _, path = _write_camera_scene(context)
+    moved = scenes_mod.camera_move(context, "w", "main", [{"frame": 1, "x": 0, "ease": True}, {"frame": 13, "x": 240}])
+    text = path.read_text(encoding="utf-8")
+    assert moved.eased_segments == 1
+    # 240 px is 2 scene units; the 12-frame segment eases over 6 frames each way.
+    # The value is only ~2 (cameraSize is a 6-digit approximation), so match loosely.
+    assert re.search(r"<E>\s*0 0 6 ", text)
+    assert re.search(r"<prev>\s*1\.99\d+ -6 ", text)
+    assert text.count("<E>") == 1
+    assert text.count("<L>") == 1
+
+
+def test_camera_move_without_ease_writes_no_ease_markup(context):
+    _, path = _write_camera_scene(context)
+    moved = scenes_mod.camera_move(context, "w", "main", [{"frame": 1, "x": 0}, {"frame": 13, "x": 240}])
+    text = path.read_text(encoding="utf-8")
+    assert moved.eased_segments == 0
+    assert "<E>" not in text and "<prev>" not in text
 
 
 def test_camera_move_writes_animated_channels(context):

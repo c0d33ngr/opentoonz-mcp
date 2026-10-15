@@ -91,8 +91,9 @@ The level must already be in the scene.
 Animates the scene's camera — pan, zoom, and rotate over time.
 
 `keyframes` is a list of `{"frame": int, "x": px, "y": px, "zoom": factor,
-"rotation": degrees}`. Only `frame` is required; the rest default to no movement
-(`x=0`, `y=0`, `zoom=1`, `rotation=0`). Keyframes may be given in any order.
+"rotation": degrees, "ease": bool}`. Only `frame` is required; the rest default to
+no movement (`x=0`, `y=0`, `zoom=1`, `rotation=0`, `ease=false`). Keyframes may be
+given in any order.
 
 - `frame` is a **1-based shot frame**, the same numbering as
   `opentoonz_render_frame`. Keyframes map to xsheet rows, so the first frame of
@@ -105,14 +106,22 @@ Animates the scene's camera — pan, zoom, and rotate over time.
   this is a physical camera move, a pan's on-screen size is multiplied by the
   zoom.
 - `rotation` is in **degrees, clockwise on screen**, about the frame centre.
-- OpenToonz interpolates **linearly** between keyframes. For easing, open the
-  scene in OpenToonz and edit the curve in the Function Editor.
+- `ease` makes the camera **glide** out of that keyframe and into the next,
+  instead of moving at a constant rate. It eases the segment that *starts* at the
+  keyframe, symmetrically (half the segment at each end), across every channel at
+  once. It is written as a real `EaseInOut` curve, so it stays editable in the
+  Function Editor.
+  - Easing is **per segment**: a run of eased keyframes settles at each pose, so
+    ease only the segments you want softened. A single-segment move can be eased
+    in one flag.
+  - The flag on the **last** keyframe has no segment to ease, so it is ignored —
+    stamping `ease` on every keyframe eases the whole move.
 - **Replaces, not merges:** each call defines the whole camera, so channels left
   at neutral are cleared. Calling it again with only `zoom` drops an earlier pan
   rather than silently keeping both.
 
 ```json
-[{"frame": 1, "zoom": 1.0}, {"frame": 48, "zoom": 1.4, "x": 60}]
+[{"frame": 1, "zoom": 1.0, "ease": true}, {"frame": 48, "zoom": 1.4, "x": 60}]
 ```
 
 **Why it patches XML:** the scripting API has no camera at all — the camera is a

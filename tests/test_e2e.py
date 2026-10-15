@@ -284,6 +284,29 @@ def test_camera_move_pans_the_render(live_context):
     assert _close(centre, (180, 180)) and _close(size, (40, 40))
 
 
+def test_camera_move_ease_softens_the_motion(live_context):
+    """An eased segment leaves its pose slowly; a linear one moves at a steady rate.
+
+    Ease and linear agree at the midpoint, so this samples the first quarter of
+    the move, where a full ease is clearly behind a linear ramp.
+    """
+    ctx = live_context
+    _camera_scene(ctx, "camease")
+
+    linear = scenes.camera_move(ctx, "camease", "main", [{"frame": 1, "x": 0}, {"frame": 12, "x": 120}])
+    assert linear.eased_segments == 0
+    centre, _ = _aperture(_look(ctx, "camease", "linear", 4))
+    # 3 of 11 rows is 0.273 of the 120 px pan
+    assert _close(centre, (267, 180))
+
+    eased = scenes.camera_move(ctx, "camease", "main", [{"frame": 1, "x": 0, "ease": True}, {"frame": 12, "x": 120}])
+    assert eased.eased_segments == 1
+    centre, _ = _aperture(_look(ctx, "camease", "eased", 4))
+    # getEaseInOutValue with a full ease over 11 rows is x^2/60.5 at row 3, i.e.
+    # 0.149 of the pan, so the artwork has barely left the pose
+    assert _close(centre, (282, 180))
+
+
 def test_camera_move_zooms_about_the_frame_centre(live_context):
     """Zoom is a magnification: 2 makes the artwork twice as large."""
     ctx = live_context

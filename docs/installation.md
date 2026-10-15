@@ -30,25 +30,19 @@ The AppImage's `AppRun` launcher mangles CLI arguments and makes OpenToonz fall
 into GUI mode, so **always run the extracted binary**. Extract once:
 
 ```bash
-mkdir -p ~/.local/share/opentoonz-mcp/runtime
-cd ~/.local/share/opentoonz-mcp/runtime
-/path/to/OpenToonz.AppImage --appimage-extract
+opentoonz-mcp fetch-runtime --appimage /path/to/OpenToonz.AppImage
 ```
 
-Then point `OPENTOONZ_RUNTIME` at the extracted `squashfs-root`:
+It extracts into `~/.local/share/opentoonz-mcp/runtime` (override with `--dest`),
+verifies `usr/bin/OpenToonz` and `usr/bin/tcomposer`, and prints the exact
+`OPENTOONZ_RUNTIME` value to use:
 
 ```bash
 export OPENTOONZ_RUNTIME=~/.local/share/opentoonz-mcp/runtime/squashfs-root
 ```
 
-There is a helper for this:
-
-```bash
-python scripts/bootstrap_runtime.py --appimage /path/to/OpenToonz.AppImage
-```
-
-It extracts the AppImage, verifies `usr/bin/OpenToonz` and `usr/bin/tcomposer`,
-and prints the exact `OPENTOONZ_RUNTIME` value to use.
+From a clone, before the package is installed, the same helper is available as
+`python scripts/bootstrap_runtime.py --appimage /path/to/OpenToonz.AppImage`.
 
 ### Option B — system install
 
@@ -56,10 +50,12 @@ If OpenToonz is installed normally (package manager, Windows, macOS) and both
 `OpenToonz` and `tcomposer` are on `PATH`, no configuration is needed. Otherwise
 set `OPENTOONZ_BIN` and `OPENTOONZ_TCOMPOSER_BIN` to their full paths.
 
-> **Platform status:** v0.1 is developed and tested on **Linux**. The runtime
+> **Platform status:** v0.4 is developed and tested on **Linux**. The runtime
 > layer is written to be platform-agnostic (no hard-coded paths or Linux-only
 > assumptions in `config.py` / `runtime.py`), but Windows/macOS are untested —
-> contributions welcome.
+> contributions welcome. One known gap: workspace locking uses `fcntl`, so on
+> Windows it degrades to a no-op (and warns once) — see
+> [architecture](architecture.md).
 
 ## 3. ffmpeg (optional)
 
@@ -72,7 +68,7 @@ Start your MCP client and call `opentoonz_doctor`. It prints every resolved path
 the version, and the prepared state:
 
 ```
-opentoonz-mcp 0.1.0
+opentoonz-mcp 0.4.0
 runtime root : /home/me/.local/share/opentoonz-mcp/runtime/squashfs-root
 OpenToonz    : .../usr/bin/OpenToonz
 tcomposer    : .../usr/bin/tcomposer

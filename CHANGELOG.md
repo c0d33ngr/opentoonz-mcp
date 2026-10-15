@@ -6,9 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-10-15
+## [0.4.0] - 2026-10-16
 
-Camera moves, output polish, and hardening.
+Camera moves — with easing — plus output polish, distribution, and hardening.
 
 ### Added
 - **`opentoonz_camera_move`** — animate the camera: pan, zoom, and rotate over
@@ -20,6 +20,15 @@ Camera moves, output polish, and hardening.
   artwork. Position is in scene pixels, `zoom` is a magnification, and
   `rotation` is in degrees; channels left at neutral are cleared, so a later call
   fully redefines the camera rather than merging with an earlier one.
+- **Camera easing.** `"ease": true` on a keyframe makes the camera glide out of
+  that pose and into the next instead of moving at a constant rate. Easing is
+  per *segment* — it belongs on the keyframe the segment starts from — so you can
+  soften one part of a move and keep the rest linear, which a single global
+  switch could not express. It is symmetric (half the segment at each end) and
+  applies to pan, zoom and rotation at once. The flag on the last keyframe has no
+  segment to ease, so it is ignored: stamping `ease` on every keyframe eases the
+  whole move. It is written as a real `EaseInOut` (`<E>`) curve, so the handles
+  stay editable in the GUI's Function Editor.
 - **`opentoonz_render_gif`** — render a scene to a looping GIF with ffmpeg's
   `palettegen`/`paletteuse` (per-clip palette, so gradients do not band). `fps`,
   `max_width`, and `colors` are configurable.
@@ -30,21 +39,39 @@ Camera moves, output polish, and hardening.
 - **`opentoonz_render_video(audio=...)`** — mux an external soundtrack
   (`-c:a aac -shortest`). OpenToonz's own audio columns are unreachable from the
   scripting API, so audio always comes from a file.
+- **`opentoonz-mcp fetch-runtime --appimage …`** — extract an OpenToonz AppImage
+  into a reusable runtime, in one command, without a clone. The AppImage launcher
+  mangles CLI arguments, so the tools need the *extracted* tree; the command
+  reports the exact `OPENTOONZ_RUNTIME` value to set, and refuses a partial
+  extraction (a runtime missing `tcomposer` would otherwise fail much later).
+  `scripts/bootstrap_runtime.py` remains as a thin wrapper for use from a clone.
 - **Per-workspace locking.** Every scene and render operation now runs under a
   re-entrant `flock` on `<workspace>/.lock`, so two agents (or processes) sharing
   a workspace can no longer silently drop each other's changes. A busy workspace
   waits, then fails with a clear message rather than hanging.
 - `opentoonz_list_workspaces` reports each workspace's size on disk (plus GIFs).
 - `scripts/probe_camera.py` — a re-runnable probe that re-establishes how the
-  camera is stored and what each channel does, for future OpenToonz upgrades.
-- Faked-subprocess unit tests for `bridge.py` and `render.py` (147 unit + 19 e2e).
+  camera is stored and what each channel does (including that easing renders and
+  survives a save), for future OpenToonz upgrades.
+- `examples/camera_move.py` — a static scene pushed in on by an eased camera,
+  rendered to `docs/camera.gif`.
+- Faked-subprocess unit tests for `bridge.py`, `render.py`, and the runtime
+  bootstrap (160 unit + 20 e2e).
 
 ### Changed
 - **The saved script succeeds or fails on its own terms.** A missing OpenToonz or
   `tcomposer` binary now raises a message naming `OPENTOONZ_RUNTIME` instead of
   surfacing a bare `FileNotFoundError`, and a missing audio file is reported
   before rendering rather than after.
-- `docs/runtime-notes.md` records the camera and audio findings (facts 27–30).
+- **Workspace locking degrades loudly where `fcntl` is unavailable** (Windows).
+  There is nothing to serialise on, so the lock is still a no-op — but it now
+  warns once, instead of losing concurrent edits in silence.
+- CI checks formatting (`ruff format --check`) and builds a wheel, so packaging
+  regressions fail the build rather than the release.
+- `uv.lock` is ignored: CI installs from the `pyproject.toml` floors, so the
+  lockfile pins nothing that ships.
+- `docs/runtime-notes.md` records the camera, easing, and audio findings
+  (facts 27–31).
 
 ### Fixed
 - **Serialised camera calls no longer accumulate channels.** Writing only the

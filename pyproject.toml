@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "opentoonz-mcp"
-version = "0.3.0"
+version = "0.4.0"
 description = "Headless OpenToonz automation for AI agents, exposed as an MCP server."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -29,6 +29,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "build>=1.2",
   "pytest>=8.0",
   "pytest-timeout>=2.3",
   "ruff>=0.5",

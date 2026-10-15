@@ -22,11 +22,14 @@ export OPENTOONZ_RUNTIME=/path/to/squashfs-root   # or put OpenToonz/tcomposer o
 
 ```bash
 ruff check .            # lint
+ruff format --check .   # formatting
 pytest -m "not e2e"     # fast unit tests (no runtime needed)
 pytest -m e2e           # end-to-end tests (needs a runtime)
+python -m build         # packaging check
 ```
 
-Please make sure both test groups pass before opening a PR.
+Please make sure both test groups pass before opening a PR — these are exactly
+the gates CI runs.
 
 ## Guidelines
 

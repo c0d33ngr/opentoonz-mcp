@@ -1,5 +1,6 @@
 import threading
 import time
+import warnings
 from pathlib import Path
 
 import pytest
@@ -123,3 +124,19 @@ def test_disk_usage_and_human_size(context):
     assert W.human_size(512) == "512 B"
     assert W.human_size(1024) == "1.0 KB"
     assert W.human_size(5 * 1024 * 1024) == "5.0 MB"
+
+
+def test_lock_warns_once_when_fcntl_is_unavailable(context, monkeypatch):
+    """Without fcntl the lock is a no-op — which must not pass unnoticed."""
+    W.create(context, "w")
+    monkeypatch.setattr(W, "fcntl", None)
+    monkeypatch.setattr(W, "_warned_no_locking", False)
+
+    with pytest.warns(RuntimeWarning, match="NOT serialised"), W.lock(context, "w"):
+        pass
+
+    # once per process, not once per operation
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with W.lock(context, "w"):
+            pass

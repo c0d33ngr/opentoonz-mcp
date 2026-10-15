@@ -14,6 +14,7 @@ from __future__ import annotations
 import functools
 import threading
 import time
+import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +36,27 @@ _LOCK_POLL = 0.05
 #: The lock is re-entrant within a thread (set_exposure calls set_cells,
 #: render_video calls render_frames), so track the depth per thread.
 _held = threading.local()
+
+#: Warn once, not once per operation, when locking is unavailable.
+_warned_no_locking = False
+
+
+def _warn_no_locking() -> None:
+    """Say, once, that this platform gets no locking at all.
+
+    Without ``fcntl`` there is nothing to serialise on, so the lock quietly
+    becomes a no-op. Quietly is the wrong default: two callers on one workspace
+    would still drop each other's edits, and nothing would say so.
+    """
+    global _warned_no_locking
+    if not _warned_no_locking:
+        _warned_no_locking = True
+        warnings.warn(
+            "Workspace locking needs fcntl, which this platform lacks: operations on one "
+            "workspace are NOT serialised and concurrent edits may be lost.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
 
 
 @dataclass(frozen=True)
@@ -141,8 +163,9 @@ def lock(context: Context, name: str, timeout: float | None = None):
     thread, so a tool may call another locked operation. Nesting does not
     deadlock, and two *threads* (or processes) are properly serialised.
 
-    On platforms without ``fcntl`` locking is skipped rather than failing; the
-    runtime layer is Linux-first (see docs/architecture.md).
+    On platforms without ``fcntl`` there is nothing to lock with, so the lock
+    degrades to a no-op — and says so once, rather than silently losing edits.
+    The runtime layer is Linux-first (see docs/architecture.md).
     """
     workspace = require(context, name)
     if getattr(_held, "root", None) == workspace.root and getattr(_held, "depth", 0):
@@ -154,7 +177,9 @@ def lock(context: Context, name: str, timeout: float | None = None):
         return
 
     handle = None
-    if fcntl is not None:  # pragma: no branch - the false path is Windows-only
+    if fcntl is None:
+        _warn_no_locking()
+    else:
         # Held open for the whole operation and closed in the finally below, so
         # it cannot be a with-block.
         handle = open(workspace.root / ".lock", "a+")  # noqa: SIM115
