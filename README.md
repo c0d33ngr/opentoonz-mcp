@@ -65,7 +65,11 @@ See **[docs/installation.md](docs/installation.md)** for how to obtain and point
 ## Install
 
 ```bash
-# from a checkout
+# from GitHub (no clone needed)
+pipx install git+https://github.com/c0d33ngr/opentoonz-mcp.git
+# or, pinned to a release
+pipx install "git+https://github.com/c0d33ngr/opentoonz-mcp.git@v0.4.0"
+# or, from a checkout
 pipx install .
 # or
 uv tool install .
@@ -198,6 +202,10 @@ pytest -m e2e            # requires a runtime (OPENTOONZ_RUNTIME=...)
 ruff check . && ruff format --check .
 python -m build          # packaging check
 ```
+
+The `e2e` suite needs a real OpenToonz runtime, so it is not part of the push/PR
+gate. To run it in CI on demand — or weekly — see
+**[`.github/workflows/e2e.yml`](.github/workflows/e2e.yml)**.
 
 Architecture notes live in **[docs/architecture.md](docs/architecture.md)**.
 

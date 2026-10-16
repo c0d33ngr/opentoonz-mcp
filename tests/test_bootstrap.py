@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -36,6 +37,29 @@ def test_fetch_runtime_extracts_and_returns_the_root(tmp_path, monkeypatch):
     assert (root / "usr" / "bin" / "tcomposer").is_file()
     # extracted, never executed: the AppImage launcher breaks headless runs
     assert calls[0][1:] == ["--appimage-extract"]
+
+
+def test_fetch_runtime_makes_a_downloaded_appimage_executable(tmp_path, monkeypatch):
+    """A fresh download has no execute bit, and an AppImage must be run to unpack."""
+    appimage = tmp_path / "OpenToonz.AppImage"
+    appimage.write_bytes(b"#!/bin/sh\n")
+    appimage.chmod(0o644)
+    assert not os.access(appimage, os.X_OK)
+
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["ran_executable"] = os.access(cmd[0], os.X_OK)
+        root = Path(kwargs["cwd"]) / "squashfs-root" / "usr" / "bin"
+        root.mkdir(parents=True, exist_ok=True)
+        for name in ("OpenToonz", "tcomposer"):
+            (root / name).write_bytes(b"#!/bin/sh\n")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    bootstrap.fetch_runtime(appimage, tmp_path / "runtime")
+    assert seen["ran_executable"] is True
+    assert os.access(appimage, os.X_OK)
 
 
 def test_fetch_runtime_rejects_a_missing_appimage(tmp_path):

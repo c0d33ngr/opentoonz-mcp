@@ -13,6 +13,8 @@ It lives in the package (not just in ``scripts/``) so that an installed copy —
 from __future__ import annotations
 
 import argparse
+import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -36,6 +38,10 @@ def fetch_runtime(appimage: str | Path, dest: str | Path | None = None) -> Path:
     source = Path(appimage).expanduser().resolve()
     if not source.is_file():
         raise OpentoonzMCPError(f"Not an AppImage: {source}")
+    if not os.access(source, os.X_OK):
+        # A fresh download has no execute bit, and an AppImage has to be run to
+        # extract itself — so set one rather than failing with a bare EACCES.
+        source.chmod(source.stat().st_mode | stat.S_IXUSR)
 
     target = Path(dest).expanduser().resolve() if dest is not None else DEFAULT_DEST
     target.mkdir(parents=True, exist_ok=True)
@@ -79,8 +85,10 @@ def main(argv: list[str] | None = None) -> int:
     """Standalone entry point, for ``python -m`` and the scripts/ shim."""
     parser = argparse.ArgumentParser(
         prog="opentoonz-mcp fetch-runtime",
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Extract an OpenToonz AppImage into a reusable runtime directory, then print "
+            "the OPENTOONZ_RUNTIME value to set."
+        ),
     )
     add_arguments(parser)
     return run(parser.parse_args(argv))

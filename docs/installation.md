@@ -7,7 +7,11 @@ for you and never bundles it.
 ## 1. Install the package
 
 ```bash
-pipx install .                 # recommended
+pipx install git+https://github.com/c0d33ngr/opentoonz-mcp.git   # from GitHub
+# or, pinned to a release
+pipx install "git+https://github.com/c0d33ngr/opentoonz-mcp.git@v0.4.0"
+# or, from a checkout
+pipx install .
 # or
 uv tool install .
 # or, for development

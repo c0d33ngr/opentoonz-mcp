@@ -1,0 +1,89 @@
+name: e2e
+
+# The end-to-end suite drives a real OpenToonz runtime, which CI cannot fetch
+# anonymously: OpenToonz publishes its Linux AppImage only as a workflow artifact
+# on its own repository (a GitHub login is required, and artifacts expire), and
+# it is deliberately *not* redistributed here. So this job is not part of the
+# push/PR gate -- it runs on demand, and weekly when it can find a runtime.
+#
+# It resolves one, in order:
+#   1. the `appimage_url` input, when you trigger it by hand;
+#   2. the OPENTOONZ_APPIMAGE_URL repository variable, if you pin a stable build;
+#   3. the newest successful Linux Build artifact on opentoonz/opentoonz, using
+#      the OPENTOONZ_ARTIFACT_TOKEN secret (needs read access to that repo).
+# With none of those it skips and warns, rather than failing for a reason that
+# has nothing to do with the code.
+
+on:
+  workflow_dispatch:
+    inputs:
+      appimage_url:
+        description: "OpenToonz Linux AppImage URL (blank: try the fallbacks, else skip)"
+        required: false
+        type: string
+  schedule:
+    - cron: "0 6 * * 1" # Mondays, 06:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Check the host tools the suite needs
+        run: |
+          ffmpeg -version | head -1
+          fc-list 2>/dev/null | grep -ci dejavu | xargs -I{} echo "dejavu fonts: {}"
+
+      - name: Obtain an OpenToonz AppImage
+        id: appimage
+        env:
+          # `gh` ships on the runner; the token only needs to read opentoonz's runs.
+          GH_TOKEN: ${{ secrets.OPENTOONZ_ARTIFACT_TOKEN }}
+          INPUT_URL: ${{ inputs.appimage_url }}
+          PINNED_URL: ${{ vars.OPENTOONZ_APPIMAGE_URL }}
+        run: |
+          set -euo pipefail
+          url="${INPUT_URL:-${PINNED_URL:-}}"
+          if [ -n "$url" ]; then
+            echo "Downloading the AppImage from the supplied URL."
+            curl -fsSL "$url" -o OpenToonz.AppImage
+          elif [ -n "${GH_TOKEN:-}" ]; then
+            echo "Looking for the newest Linux Build artifact on opentoonz/opentoonz."
+            run_id=$(gh api \
+              "repos/opentoonz/opentoonz/actions/workflows/workflow_linux.yml/runs?status=success&per_page=1" \
+              --jq '.workflow_runs[0].id')
+            gh run download "$run_id" --repo opentoonz/opentoonz --dir downloaded
+            find downloaded -name '*.AppImage' -print -exec mv {} OpenToonz.AppImage \;
+          fi
+          if [ ! -f OpenToonz.AppImage ]; then
+            echo "::warning title=No OpenToonz runtime::Skipping the e2e suite. Pass appimage_url, set the OPENTOONZ_APPIMAGE_URL variable, or the OPENTOONZ_ARTIFACT_TOKEN secret."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ls -l OpenToonz.AppImage
+          echo "available=true" >> "$GITHUB_OUTPUT"
+
+      - name: Extract the runtime
+        if: steps.appimage.outputs.available == 'true'
+        # Our own command, so the workflow exercises the path users take.
+        run: opentoonz-mcp fetch-runtime --appimage OpenToonz.AppImage --dest runtime
+
+      - name: End-to-end tests
+        if: steps.appimage.outputs.available == 'true'
+        env:
+          OPENTOONZ_RUNTIME: ${{ github.workspace }}/runtime/squashfs-root
+        run: pytest -m e2e -v --timeout=300

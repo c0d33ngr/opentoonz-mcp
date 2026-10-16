@@ -31,6 +31,14 @@ python -m build         # packaging check
 Please make sure both test groups pass before opening a PR — these are exactly
 the gates CI runs.
 
+The push/PR gate covers lint, formatting, the unit tests and the packaging check.
+The `e2e` suite needs a real OpenToonz runtime, which CI cannot fetch anonymously
+(OpenToonz publishes its Linux AppImage only as a login-gated workflow artifact,
+and it is deliberately not redistributed here), so it runs separately, on demand
+via **Actions → e2e → Run workflow** — pass an `appimage_url` if you have one —
+and weekly when a runtime can be found. See
+[`.github/workflows/e2e.yml`](.github/workflows/e2e.yml).
+
 ## Guidelines
 
 - **Keep `server.py` thin.** Logic belongs in the library modules
