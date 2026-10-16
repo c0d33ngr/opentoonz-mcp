@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Structured tool results.** `opentoonz_list_workspaces`, `opentoonz_scene_info`
+  and the `opentoonz_render*` tools now return a machine-readable payload beside
+  the human summary (`models.py`: `SceneReport`, `WorkspaceReport`,
+  `RenderReport`), so an agent reads fields instead of parsing prose. The summary
+  is unchanged and still the first content block.
+- **Inline frame previews.** `opentoonz_render_frame` returns the rendered PNG as
+  an image block as well as writing it to disk, so looking at a frame costs no
+  extra round-trip.
 - **Frame ranges on `opentoonz_render`** — `start`/`end` render an inclusive
   range (e.g. frames 1–3) instead of the whole scene, so checking a section does
   not cost a full render.

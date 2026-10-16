@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import argparse
 import shutil
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from fastmcp import FastMCP
+from fastmcp.tools import ToolResult
+from fastmcp.utilities.types import Image as ImageBlock
+from mcp.types import TextContent
 from PIL import Image
+from pydantic import BaseModel
 
-from . import __version__, bootstrap, bridge, draw, scenes
+from . import __version__, bootstrap, bridge, draw, models, scenes
 from . import render as render_mod
 from . import workspace as workspace_mod
 from .context import get_context
@@ -34,6 +40,25 @@ mcp = FastMCP(
 
 def _fail(exc: Exception) -> str:
     return f"ERROR [{type(exc).__name__}]: {exc}"
+
+
+def _structured(
+    summary: str,
+    data: BaseModel | dict | None = None,
+    *,
+    images: Sequence[Path] = (),
+    error: bool = False,
+) -> ToolResult:
+    """A tool result carrying a human summary, optional images, and data.
+
+    The summary stays the first text block, so a client that ignores the
+    structured payload sees exactly what it saw before. ``images`` are attached
+    as real image blocks, so looking at a render costs no extra round-trip.
+    """
+    blocks: list[Any] = [TextContent(type="text", text=summary)]
+    blocks.extend(ImageBlock(path=str(path)) for path in images)
+    payload = data.model_dump() if isinstance(data, BaseModel) else data
+    return ToolResult(content=blocks, structured_content=payload, is_error=error)
 
 
 def _format_exposure(pairs: list[tuple[int, int]]) -> str:
@@ -122,25 +147,35 @@ def opentoonz_create_workspace(name: str) -> str:
 
 
 @mcp.tool()
-def opentoonz_list_workspaces() -> str:
+def opentoonz_list_workspaces() -> ToolResult:
     """List workspaces with their scenes and rendered videos."""
     try:
         workspaces = workspace_mod.list_workspaces(get_context())
     except OpentoonzMCPError as exc:
-        return _fail(exc)
-    if not workspaces:
-        return "No workspaces yet."
+        return _structured(_fail(exc), error=True)
     lines = []
+    reports = []
     for ws in workspaces:
         scene_names = [p.name for p in ws.scenes()]
         videos = [p.name for p in sorted(ws.render.glob("*.mp4"))]
         gifs = [p.name for p in sorted(ws.render.glob("*.gif"))]
         frames = len(list(ws.render.glob("*.png")))
-        lines.append(
-            f"{ws.name}: scenes={scene_names} videos={videos} gifs={gifs} frames={frames} "
-            f"size={workspace_mod.human_size(workspace_mod.disk_usage(ws))}"
+        size_bytes = workspace_mod.disk_usage(ws)
+        size = workspace_mod.human_size(size_bytes)
+        reports.append(
+            models.WorkspaceReport(
+                name=ws.name,
+                scenes=scene_names,
+                videos=videos,
+                gifs=gifs,
+                frames=frames,
+                size_bytes=size_bytes,
+                size=size,
+            )
         )
-    return "\n".join(lines)
+        lines.append(f"{ws.name}: scenes={scene_names} videos={videos} gifs={gifs} frames={frames} size={size}")
+    summary = "\n".join(lines) if lines else "No workspaces yet."
+    return _structured(summary, {"workspaces": [report.model_dump() for report in reports]})
 
 
 # -- scenes -------------------------------------------------------------------
@@ -223,7 +258,7 @@ def opentoonz_import_images_as_level(
 
 
 @mcp.tool()
-def opentoonz_scene_info(workspace: str, scene: str, max_rows: int = scenes.DEFAULT_MAX_ROWS) -> str:
+def opentoonz_scene_info(workspace: str, scene: str, max_rows: int = scenes.DEFAULT_MAX_ROWS) -> ToolResult:
     """Report a scene's frame/column counts, its levels, and its cell map.
 
     The cell map is scanned row by row and stops at max_rows (default 1000);
@@ -232,7 +267,7 @@ def opentoonz_scene_info(workspace: str, scene: str, max_rows: int = scenes.DEFA
     try:
         info = scenes.scene_info(get_context(), workspace, scene, max_rows=max_rows)
     except OpentoonzMCPError as exc:
-        return _fail(exc)
+        return _structured(_fail(exc), error=True)
     lines = [f"frames={info.frame_count} columns={info.column_count}"]
     if info.cells_truncated:
         lines.append(f"note: cell list truncated at max_rows={max_rows} (raise max_rows to see the rest)")
@@ -240,7 +275,20 @@ def opentoonz_scene_info(workspace: str, scene: str, max_rows: int = scenes.DEFA
         lines.append(f"level: {level.name} type={level.type} frames={level.frame_count} path={level.path}")
     for cell in info.cells:
         lines.append(f"cell: row={cell.row} col={cell.column} level={cell.level} fid={cell.fid}")
-    return "\n".join(lines)
+    report = models.SceneReport(
+        scene=scene,
+        frames=info.frame_count,
+        columns=info.column_count,
+        levels=[
+            models.LevelReport(name=level.name, type=level.type, frames=level.frame_count, path=level.path)
+            for level in info.levels
+        ],
+        cells=[
+            models.CellReport(row=cell.row, column=cell.column, level=cell.level, fid=cell.fid) for cell in info.cells
+        ],
+        cells_truncated=info.cells_truncated,
+    )
+    return _structured("\n".join(lines), report)
 
 
 @mcp.tool()
@@ -385,27 +433,41 @@ def _png_size(path: Path) -> str:
 @mcp.tool()
 def opentoonz_render_frame(
     workspace: str, scene: str, frame: int = 1, out_name: str = "look", max_width: int | None = None
-) -> str:
+) -> ToolResult:
     """Render a single frame to a PNG — the agent's 'look' at the result.
 
-    max_width (optional) downscales the returned PNG in place to that width, so
-    a large scene costs fewer image tokens to inspect. The file itself becomes
-    the smaller preview; the scene's resolution is unchanged, and
-    opentoonz_render / opentoonz_render_video output is never downscaled.
+    The image is returned inline as well as on disk, so looking at a frame costs
+    no extra round-trip. max_width (optional) downscales it in place to that
+    width, so a large scene costs fewer image tokens. The scene's resolution is
+    unchanged, and opentoonz_render / opentoonz_render_video output is never
+    downscaled.
     """
     try:
         result = render_mod.render_frame(
             get_context(), workspace, scene, frame=frame, out_name=out_name, max_width=max_width
         )
     except OpentoonzMCPError as exc:
-        return _fail(exc)
+        return _structured(_fail(exc), error=True)
     if not result.frames:
-        return f"FAILED (exit={result.exit_code}, {result.duration:.1f}s)\n{result.log}"
-    size = _png_size(result.frames[0])
+        return _structured(f"FAILED (exit={result.exit_code}, {result.duration:.1f}s)\n{result.log}", error=True)
+    path = result.frames[0]
+    size = _png_size(path)
+    width, height = (int(part) for part in size.split("x"))
+    downscaled = None
     if result.downscaled_from:
-        source = result.downscaled_from
-        return f"OK: frame -> {result.frames[0]} ({size}, downscaled from {source[0]}x{source[1]})"
-    return f"OK: frame -> {result.frames[0]} ({size})"
+        downscaled = f"{result.downscaled_from[0]}x{result.downscaled_from[1]}"
+        summary = f"OK: frame -> {path} ({size}, downscaled from {downscaled})"
+    else:
+        summary = f"OK: frame -> {path} ({size})"
+    report = models.RenderReport(
+        output=str(path),
+        frames=1,
+        duration=result.duration,
+        width=width,
+        height=height,
+        downscaled_from=downscaled,
+    )
+    return _structured(summary, report, images=[path])
 
 
 @mcp.tool()
@@ -415,7 +477,7 @@ def opentoonz_render(
     out_name: str = "render",
     start: int | None = None,
     end: int | None = None,
-) -> str:
+) -> ToolResult:
     """Render a scene to PNG frames under <workspace>/render/ with tcomposer.
 
     By default the whole scene renders. Give start and end together to render an
@@ -423,36 +485,51 @@ def opentoonz_render(
     is much cheaper when you only need a section.
     """
     if (start is None) != (end is None):
-        return _fail(OpentoonzMCPError("start and end must be given together, as an inclusive frame range."))
+        message = _fail(OpentoonzMCPError("start and end must be given together, as an inclusive frame range."))
+        return _structured(message, error=True)
     frame_range = None if start is None else (int(start), int(end))
     try:
         result = render_mod.render_frames(get_context(), workspace, scene, out_name=out_name, frame_range=frame_range)
     except OpentoonzMCPError as exc:
-        return _fail(exc)
+        return _structured(_fail(exc), error=True)
     if not result.frames:
-        return f"FAILED (exit={result.exit_code}, {result.duration:.1f}s)\n{result.log}"
+        return _structured(f"FAILED (exit={result.exit_code}, {result.duration:.1f}s)\n{result.log}", error=True)
     span = f" (frames {start}-{end})" if frame_range else ""
-    return f"OK: {len(result.frames)} frames{span} -> {result.frames[0].parent} ({result.duration:.1f}s)"
+    report = models.RenderReport(
+        output=str(result.frames[0].parent), frames=len(result.frames), duration=result.duration
+    )
+    return _structured(
+        f"OK: {len(result.frames)} frames{span} -> {result.frames[0].parent} ({result.duration:.1f}s)", report
+    )
 
 
 @mcp.tool()
 def opentoonz_render_video(
-    workspace: str, scene: str, fps: int = 24, out_name: str = "video", audio: str | None = None
-) -> str:
+    workspace: str,
+    scene: str,
+    fps: int = 24,
+    out_name: str = "video",
+    audio: str | None = None,
+    crf: int | None = None,
+    scale: float | None = None,
+) -> ToolResult:
     """Render a scene and mux the frames into an MP4 with ffmpeg.
 
     audio (optional) is a path to an external soundtrack (mp3, wav, ...). It is
     encoded as AAC and cut to the video's length. OpenToonz's own audio columns
     cannot be reached from the scripting API, so audio always comes from a file.
+    crf (0-51, lower is better) trades quality for file size, and scale (a
+    positive factor, e.g. 0.5) resizes the video.
     """
     try:
         video, result = render_mod.render_video(
-            get_context(), workspace, scene, fps=fps, out_name=out_name, audio=audio
+            get_context(), workspace, scene, fps=fps, out_name=out_name, audio=audio, crf=crf, scale=scale
         )
     except OpentoonzMCPError as exc:
-        return _fail(exc)
+        return _structured(_fail(exc), error=True)
     track = f" + audio {Path(audio).name}" if audio else ""
-    return f"OK: {len(result.frames)} frames @ {fps}fps{track} -> {video}"
+    report = models.RenderReport(output=str(video), frames=len(result.frames), duration=result.duration, fps=int(fps))
+    return _structured(f"OK: {len(result.frames)} frames @ {fps}fps{track} -> {video}", report)
 
 
 @mcp.tool()
@@ -463,7 +540,7 @@ def opentoonz_render_gif(
     out_name: str = "reel",
     max_width: int | None = None,
     colors: int = 256,
-) -> str:
+) -> ToolResult:
     """Render a scene to a looping GIF — the shareable form of a short move.
 
     fps sets playback speed (12–15 reads well for hand-drawn work), max_width
@@ -476,9 +553,18 @@ def opentoonz_render_gif(
             get_context(), workspace, scene, fps=fps, out_name=out_name, max_width=max_width, colors=colors
         )
     except OpentoonzMCPError as exc:
-        return _fail(exc)
+        return _structured(_fail(exc), error=True)
     size = workspace_mod.human_size(gif.stat().st_size)
-    return f"OK: {len(result.frames)} frames @ {fps}fps -> {gif} ({_png_size(gif)}, {size})"
+    width, height = (int(part) for part in _png_size(gif).split("x"))
+    report = models.RenderReport(
+        output=str(gif),
+        frames=len(result.frames),
+        duration=result.duration,
+        width=width,
+        height=height,
+        fps=int(fps),
+    )
+    return _structured(f"OK: {len(result.frames)} frames @ {fps}fps -> {gif} ({width}x{height}, {size})", report)
 
 
 # -- escape hatch -------------------------------------------------------------

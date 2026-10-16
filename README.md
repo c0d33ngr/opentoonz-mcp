@@ -158,13 +158,16 @@ OPENTOONZ_RUNTIME=/path/to/squashfs-root python examples/camera_move.py   # ease
 | `opentoonz_camera_move` | Animate the camera (pan / zoom / rotate), with per-segment easing |
 | `opentoonz_draw_frame` | Draw one RGBA frame (PIL primitives + image compositing) |
 | `opentoonz_draw_frames` | Draw a whole sequence |
-| `opentoonz_render_frame` | Render one frame (the "look"), optionally downscaled |
+| `opentoonz_render_frame` | Render one frame, returned inline as an image |
 | `opentoonz_render` | Render PNG frames via `tcomposer` (optional frame range) |
 | `opentoonz_render_video` | Render + ffmpeg → MP4 (optional audio, crf, scale) |
 | `opentoonz_render_gif` | Render + ffmpeg → looping GIF |
 | `opentoonz_run_script` | Arbitrary OpenToonz JS (escape hatch) |
 
 Full reference, including the drawing-op schema: **[docs/tools.md](docs/tools.md)**.
+The data-returning tools also return structured content (see
+**[docs/architecture.md](docs/architecture.md)**), so results can be read as
+fields rather than parsed from text.
 
 ## Limitations
 

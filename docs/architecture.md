@@ -12,12 +12,19 @@ src/opentoonz_mcp/
 ├── draw.py        PIL frame authoring (RGBA PNG frames + op schema)
 ├── scenes.py      Scene create/resize, camera moves, inspect, level import/reuse, cell & exposure timing
 ├── render.py      tcomposer rendering + ffmpeg muxing (MP4, GIF)
+├── models.py      Pydantic results for the data-returning tools (structured output)
 ├── bootstrap.py   `fetch-runtime`: extract an OpenToonz AppImage into a runtime
 └── server.py      FastMCP tool definitions (thin wrappers over the above)
 ```
 
 `server.py` contains no logic beyond formatting and error handling — every
 behaviour is testable directly through the library modules (see `tests/`).
+
+The data-returning tools (`list_workspaces`, `scene_info`, `render*`) return a
+`ToolResult` built by `server._structured`: a human-readable summary as the first
+text block, plus a `models.py` payload as structured content. `render_frame`
+also attaches the PNG as an image block, so looking at a frame costs no extra
+round-trip.
 
 ## Data flow
 

@@ -4,6 +4,13 @@ Every tool returns a short human-readable string. Failures are returned as
 `ERROR [ExceptionType]: message` rather than raising, so an agent can read and
 react to them.
 
+The data-returning tools — `opentoonz_list_workspaces`, `opentoonz_scene_info`,
+and the `opentoonz_render*` tools — return that same summary **plus** a
+machine-readable payload as structured content (see `models.py`), so a client can
+read `frames`, `levels`, `cells`, and so on without parsing the text.
+`opentoonz_render_frame` additionally returns the rendered PNG as an **image
+block**, so looking at a frame needs no extra round-trip.
+
 ## Diagnostics
 
 ### `opentoonz_health() -> str`
@@ -190,7 +197,9 @@ Example:
 ## Rendering
 
 ### `opentoonz_render_frame(workspace, scene, frame=1, out_name="look", max_width=None) -> str`
-Renders a single frame to a PNG — the agent's "look" at its work.
+Renders a single frame to a PNG — the agent's "look" at its work. The image is
+returned **inline** as an image block as well as written to disk, so inspecting a
+frame costs no extra round-trip.
 
 `max_width` downscales the returned PNG **in place** so looking at a large scene
 costs fewer image tokens; the reply reports the size, e.g. `(960x540, downscaled
