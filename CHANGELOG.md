@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-16
+
 ### Added
 - **`opentoonz_extract_frames`** — pulls a video's frames into `drawings/` as a
   level with ffmpeg, so outside footage can join a scene. Optional resample
