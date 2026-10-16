@@ -360,3 +360,18 @@ Notes:
 - Use **absolute paths**.
 - Scripts print `__OTMCP_OK__` on success in the built-in tools; if you write
   your own via this tool, success is judged only by stdout, not the exit code.
+
+## Resources
+
+Three read-only MCP **resources** expose the same data as JSON, so a client can
+poll workspace state without calling a tool:
+
+| Resource | Contents | Cost |
+| --- | --- | --- |
+| `opentoonz://workspaces` | Every workspace with its scenes, videos and size | filesystem |
+| `opentoonz://workspace/{name}` | One workspace's contents | filesystem |
+| `opentoonz://workspace/{name}/scene/{scene}` | One scene's frames, columns, levels and cells | runs OpenToonz |
+
+They reuse the same models as the tools (`WorkspaceReport`, `SceneReport`), so the
+JSON matches what the corresponding tool returns as structured content. A missing
+workspace or scene surfaces as a resource read error.

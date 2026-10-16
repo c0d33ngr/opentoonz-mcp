@@ -174,6 +174,20 @@ The data-returning tools also return structured content (see
 **[docs/architecture.md](docs/architecture.md)**), so results can be read as
 fields rather than parsed from text.
 
+### Resources
+
+Beyond the tools, three read-only MCP **resources** expose the same workspace data
+as JSON, so a client can poll state without calling a tool:
+
+| Resource | Contents |
+| --- | --- |
+| `opentoonz://workspaces` | Every workspace with its scenes, videos and size |
+| `opentoonz://workspace/{name}` | One workspace's contents |
+| `opentoonz://workspace/{name}/scene/{scene}` | One scene's frames, columns, levels and cells |
+
+The first two read only the filesystem; the scene one reads through OpenToonz and
+so costs a script run.
+
 ## Limitations
 
 OpenToonz's JS API is a **subset** of the GUI, and some of the boundaries are sharp:

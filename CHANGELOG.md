@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **MCP resources** — `opentoonz://workspaces`, `opentoonz://workspace/{name}`
+  and `opentoonz://workspace/{name}/scene/{scene}` expose the workspace data as
+  JSON, so a client can poll state without calling a tool. They reuse the tool
+  models, so the payloads match. The first two read only the filesystem.
 - **Progress reporting during renders.** `opentoonz_render`, `opentoonz_render_video`,
   `opentoonz_render_gif` and `opentoonz_render_batch` now report progress to the
   client (start/finish, or once per scene for a batch) and run the blocking render

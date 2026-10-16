@@ -1,9 +1,11 @@
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
 from PIL import Image
 
+from opentoonz_mcp.errors import WorkspaceError
 from opentoonz_mcp.server import _format_exposure, mcp
 
 EXPECTED_TOOLS = {
@@ -465,3 +467,66 @@ def test_opentoonz_render_batch_reports_per_scene_progress(context, monkeypatch)
     asyncio.run(server.opentoonz_render_batch("w", ctx=recorder))
     assert [call[0] for call in recorder.calls] == [0, 1, 2]
     assert all(call[1] == 2 for call in recorder.calls)
+
+
+# -- MCP resources (C2) --------------------------------------------------------
+def _read_resource(uri):
+    return asyncio.run(mcp.read_resource(uri)).contents[0].content
+
+
+def test_resources_are_registered():
+    uris = {str(resource.uri) for resource in asyncio.run(mcp.list_resources())}
+    templates = {template.uri_template for template in asyncio.run(mcp.list_resource_templates())}
+    assert "opentoonz://workspaces" in uris
+    assert {"opentoonz://workspace/{name}", "opentoonz://workspace/{name}/scene/{scene}"} <= templates
+
+
+def test_workspaces_resource_lists_workspaces(context, monkeypatch):
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    ws, _ = W.create(context, "w")
+    (ws.render / "clip.mp4").write_bytes(b"x" * 10)
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    payload = json.loads(_read_resource("opentoonz://workspaces"))
+    assert payload[0]["name"] == "w"
+    assert payload[0]["videos"] == ["clip.mp4"]
+    assert payload[0]["size_bytes"] >= 10
+
+
+def test_workspace_resource_describes_one_workspace(context, monkeypatch):
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    ws, _ = W.create(context, "w")
+    ws.scene_path("main").write_text("<scene/>", encoding="utf-8")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    payload = json.loads(_read_resource("opentoonz://workspace/w"))
+    assert payload["name"] == "w"
+    assert payload["scenes"] == ["main.tnz"]
+
+
+def test_workspace_resource_rejects_a_missing_workspace(context, monkeypatch):
+    from opentoonz_mcp import server
+
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    with pytest.raises(WorkspaceError):
+        server.workspace_resource("ghost")
+
+
+def test_scene_resource_reports_the_scene(context, monkeypatch):
+    from opentoonz_mcp import scenes as scenes_mod
+    from opentoonz_mcp import server
+
+    info = scenes_mod.SceneInfo(
+        frame_count=12,
+        column_count=2,
+        levels=[scenes_mod.LevelInfo(name="ball", type="ToonzRasterLevel", frame_count="4", path="drawings/ball..png")],
+        cells=[scenes_mod.CellInfo(row=0, column=0, level="ball", fid="1")],
+    )
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    monkeypatch.setattr(scenes_mod, "scene_info", lambda *a, **k: info)
+    payload = json.loads(_read_resource("opentoonz://workspace/w/scene/main"))
+    assert payload["frames"] == 12
+    assert payload["levels"][0]["name"] == "ball"
+    assert payload["cells"][0]["row"] == 0

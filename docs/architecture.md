@@ -26,6 +26,11 @@ text block, plus a `models.py` payload as structured content. `render_frame`
 also attaches the PNG as an image block, so looking at a frame costs no extra
 round-trip.
 
+The same models back three read-only MCP **resources** (`opentoonz://workspaces`,
+`opentoonz://workspace/{name}`, `opentoonz://workspace/{name}/scene/{scene}`), so a
+client can poll workspace state as JSON without calling a tool. The long-running
+render tools also report progress and run their blocking work off the event loop.
+
 ## Data flow
 
 ```

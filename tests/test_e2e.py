@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 
 import pytest
@@ -592,3 +593,17 @@ def test_render_video_reports_progress_end_to_end(live_context, monkeypatch):
     asyncio.run(server.opentoonz_render_video("progress", "main", fps=8, ctx=recorder))
     assert recorder.calls[0] == (0, 1)
     assert recorder.calls[-1] == (1, 1)
+
+
+def test_scene_resource_reads_a_real_scene(live_context, monkeypatch):
+    """The scene resource reads through OpenToonz, so prove it against a real one."""
+    from opentoonz_mcp import server
+
+    ctx = live_context
+    _camera_scene(ctx, "resource")
+    monkeypatch.setattr(server, "get_context", lambda: ctx)
+    payload = json.loads(server.scene_resource("resource", "main"))
+    assert payload["scene"] == "main"
+    assert payload["frames"] > 0
+    assert payload["columns"] > 0
+    assert payload["levels"]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 from collections.abc import Sequence
 from pathlib import Path
@@ -52,6 +53,37 @@ async def _progress(ctx: Context | None, progress: float, total: float, message:
     """
     if ctx is not None:
         await ctx.report_progress(progress=progress, total=total, message=message)
+
+
+def _workspace_report(ws) -> models.WorkspaceReport:
+    """Describe one workspace — the shape shared by the tool and the resource."""
+    size_bytes = workspace_mod.disk_usage(ws)
+    return models.WorkspaceReport(
+        name=ws.name,
+        scenes=[path.name for path in ws.scenes()],
+        videos=[path.name for path in sorted(ws.render.glob("*.mp4"))],
+        gifs=[path.name for path in sorted(ws.render.glob("*.gif"))],
+        frames=len(list(ws.render.glob("*.png"))),
+        size_bytes=size_bytes,
+        size=workspace_mod.human_size(size_bytes),
+    )
+
+
+def _scene_report(scene: str, info) -> models.SceneReport:
+    """Describe one scene — the shape shared by the tool and the resource."""
+    return models.SceneReport(
+        scene=scene,
+        frames=info.frame_count,
+        columns=info.column_count,
+        levels=[
+            models.LevelReport(name=level.name, type=level.type, frames=level.frame_count, path=level.path)
+            for level in info.levels
+        ],
+        cells=[
+            models.CellReport(row=cell.row, column=cell.column, level=cell.level, fid=cell.fid) for cell in info.cells
+        ],
+        cells_truncated=info.cells_truncated,
+    )
 
 
 def _structured(
@@ -193,24 +225,12 @@ def opentoonz_list_workspaces() -> ToolResult:
     lines = []
     reports = []
     for ws in workspaces:
-        scene_names = [p.name for p in ws.scenes()]
-        videos = [p.name for p in sorted(ws.render.glob("*.mp4"))]
-        gifs = [p.name for p in sorted(ws.render.glob("*.gif"))]
-        frames = len(list(ws.render.glob("*.png")))
-        size_bytes = workspace_mod.disk_usage(ws)
-        size = workspace_mod.human_size(size_bytes)
-        reports.append(
-            models.WorkspaceReport(
-                name=ws.name,
-                scenes=scene_names,
-                videos=videos,
-                gifs=gifs,
-                frames=frames,
-                size_bytes=size_bytes,
-                size=size,
-            )
+        report = _workspace_report(ws)
+        reports.append(report)
+        lines.append(
+            f"{ws.name}: scenes={report.scenes} videos={report.videos} gifs={report.gifs} "
+            f"frames={report.frames} size={report.size}"
         )
-        lines.append(f"{ws.name}: scenes={scene_names} videos={videos} gifs={gifs} frames={frames} size={size}")
     summary = "\n".join(lines) if lines else "No workspaces yet."
     return _structured(summary, {"workspaces": [report.model_dump() for report in reports]})
 
@@ -395,20 +415,7 @@ def opentoonz_scene_info(workspace: str, scene: str, max_rows: int = scenes.DEFA
         lines.append(f"level: {level.name} type={level.type} frames={level.frame_count} path={level.path}")
     for cell in info.cells:
         lines.append(f"cell: row={cell.row} col={cell.column} level={cell.level} fid={cell.fid}")
-    report = models.SceneReport(
-        scene=scene,
-        frames=info.frame_count,
-        columns=info.column_count,
-        levels=[
-            models.LevelReport(name=level.name, type=level.type, frames=level.frame_count, path=level.path)
-            for level in info.levels
-        ],
-        cells=[
-            models.CellReport(row=cell.row, column=cell.column, level=cell.level, fid=cell.fid) for cell in info.cells
-        ],
-        cells_truncated=info.cells_truncated,
-    )
-    return _structured("\n".join(lines), report)
+    return _structured("\n".join(lines), _scene_report(scene, info))
 
 
 @mcp.tool()
@@ -854,6 +861,33 @@ def opentoonz_run_script(workspace: str, code: str, timeout: int = 90) -> str:
     except OpentoonzMCPError as exc:
         return _fail(exc)
     return result.summary()
+
+
+# -- resources ----------------------------------------------------------------
+#: Read-only views of the same data the tools return, so a client can poll
+#: workspace state without calling a tool. The scene one reads through OpenToonz.
+@mcp.resource("opentoonz://workspaces", mime_type="application/json")
+def workspaces_resource() -> str:
+    """Every workspace with its scenes, videos and size, as JSON."""
+    reports = [_workspace_report(ws) for ws in workspace_mod.list_workspaces(get_context())]
+    return json.dumps([report.model_dump() for report in reports], indent=2)
+
+
+@mcp.resource("opentoonz://workspace/{name}", mime_type="application/json")
+def workspace_resource(name: str) -> str:
+    """One workspace's contents, as JSON."""
+    report = _workspace_report(workspace_mod.require(get_context(), name))
+    return json.dumps(report.model_dump(), indent=2)
+
+
+@mcp.resource("opentoonz://workspace/{name}/scene/{scene}", mime_type="application/json")
+def scene_resource(name: str, scene: str) -> str:
+    """One scene's shape (frames, columns, levels, cells), as JSON.
+
+    Unlike the two above, this reads through OpenToonz, so it costs a script run.
+    """
+    info = scenes.scene_info(get_context(), name, scene)
+    return json.dumps(_scene_report(scene, info).model_dump(), indent=2)
 
 
 def _build_parser() -> argparse.ArgumentParser:
