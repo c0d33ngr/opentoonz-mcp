@@ -16,7 +16,7 @@ import re
 import threading
 import time
 import warnings
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -263,3 +263,32 @@ def locked(fn):
             return fn(context, workspace, *args, **kwargs)
 
     return wrapper
+
+
+@locked
+def clean(context: Context, workspace: str, what: str = "all") -> tuple[list[str], int]:
+    """Delete a workspace's generated files and report what was freed.
+
+    ``what`` is ``drawings``, ``render``, ``scripts`` or ``all``. Only the
+    *contents* go: the workspace and its subdirectories stay, so a later render
+    or import still finds the layout it expects. This is irreversible, so the
+    ``opentoonz_clean`` tool makes the caller pass ``confirm`` first.
+    """
+    if what != "all" and what not in SUBDIRS:
+        raise WorkspaceError(f"what must be 'all' or one of {list(SUBDIRS)}, got {what!r}")
+    ws = require(context, workspace)
+    targets = list(SUBDIRS) if what == "all" else [what]
+    freed = 0
+    for name in targets:
+        directory = ws.root / name
+        if not directory.is_dir():
+            continue
+        for path in directory.rglob("*"):
+            if path.is_file():
+                with suppress(OSError):  # a concurrent writer may win the race
+                    freed += path.stat().st_size
+                path.unlink(missing_ok=True)
+        # Empty directories, deepest first, so a parent is never removed first.
+        for path in sorted((p for p in directory.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+            path.rmdir()
+    return targets, freed

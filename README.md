@@ -149,6 +149,7 @@ OPENTOONZ_RUNTIME=/path/to/squashfs-root python examples/camera_move.py   # ease
 | `opentoonz_doctor` | Full diagnostics (paths, versions, state) |
 | `opentoonz_create_workspace` | Create a workspace (idempotent) |
 | `opentoonz_list_workspaces` | Inventory workspaces/scenes/videos |
+| `opentoonz_clean` | Delete generated files to reclaim disk space (needs `confirm=true`) |
 | `opentoonz_scene_new` | Create a scene, optionally setting resolution/fps |
 | `opentoonz_set_scene_settings` | Change camera resolution / fps |
 | `opentoonz_import_images_as_level` | Image sequence → raster level (additive, re-runnable) |

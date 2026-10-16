@@ -4,10 +4,11 @@ Every tool returns a short human-readable string. Failures are returned as
 `ERROR [ExceptionType]: message` rather than raising, so an agent can read and
 react to them.
 
-The data-returning tools — `opentoonz_list_workspaces`, `opentoonz_scene_info`,
-and the `opentoonz_render*` tools — return that same summary **plus** a
-machine-readable payload as structured content (see `models.py`), so a client can
-read `frames`, `levels`, `cells`, and so on without parsing the text.
+The data-returning tools — `opentoonz_list_workspaces`, `opentoonz_clean`,
+`opentoonz_scene_info`, and the `opentoonz_render*` tools — return that same
+summary **plus** a machine-readable payload as structured content (see
+`models.py`), so a client can read `frames`, `levels`, `cells`, and so on without
+parsing the text.
 `opentoonz_render_frame` additionally returns the rendered PNG as an **image
 block**, so looking at a frame needs no extra round-trip.
 
@@ -29,7 +30,17 @@ Idempotent — calling it again reuses the workspace. Names may be nested
 
 ### `opentoonz_list_workspaces() -> str`
 Lists each workspace with its scenes, videos, GIFs, rendered frame count, and
-total size on disk (the render folder is usually the bulk of it).
+total size on disk (the render folder is usually the bulk of it). Also returns a
+structured `workspaces` payload with the same fields.
+
+### `opentoonz_clean(workspace, what="all", confirm=False) -> str`
+Deletes generated files to reclaim disk space. `what` is `drawings`, `render`,
+`scripts`, or `all` (the default); only the contents go, so the workspace and its
+subdirectories remain and can be reused.
+
+This is **irreversible**, so it refuses unless `confirm=true`. The reply reports
+how much was freed. Use `opentoonz_list_workspaces` first to see what a workspace
+costs.
 
 ## Scenes
 

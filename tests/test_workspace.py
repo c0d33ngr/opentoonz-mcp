@@ -153,6 +153,34 @@ def test_disk_usage_and_human_size(context):
     assert W.human_size(5 * 1024 * 1024) == "5.0 MB"
 
 
+def test_clean_removes_generated_files_but_keeps_the_workspace(context):
+    ws, _ = W.create(context, "w")
+    (ws.drawings / "ball.0001.png").write_bytes(b"x" * 100)
+    (ws.render / "clip.mp4").write_bytes(b"y" * 200)
+    (ws.scripts / "gen.toonzscript").write_text("// x", encoding="utf-8")
+    targets, freed = W.clean(context, "w", "all")
+    assert sorted(targets) == ["drawings", "render", "scripts"]
+    assert freed >= 300
+    assert ws.root.is_dir()
+    assert not any(ws.drawings.iterdir()) and not any(ws.render.iterdir()) and not any(ws.scripts.iterdir())
+
+
+def test_clean_can_target_one_directory(context):
+    ws, _ = W.create(context, "w")
+    (ws.drawings / "a.png").write_bytes(b"x")
+    (ws.render / "clip.mp4").write_bytes(b"y")
+    targets, _ = W.clean(context, "w", "drawings")
+    assert targets == ["drawings"]
+    assert not any(ws.drawings.iterdir())
+    assert (ws.render / "clip.mp4").is_file()
+
+
+def test_clean_rejects_an_unknown_target(context):
+    W.create(context, "w")
+    with pytest.raises(WorkspaceError):
+        W.clean(context, "w", "everything")
+
+
 def test_lock_warns_once_when_fcntl_is_unavailable(context, monkeypatch):
     """Without fcntl the lock is a no-op — which must not pass unnoticed."""
     W.create(context, "w")

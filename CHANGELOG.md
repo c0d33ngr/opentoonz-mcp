@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`opentoonz_clean(workspace, what=, confirm=)`** — deletes a workspace's
+  drawings, renders, or scripts to reclaim disk space, reporting how much was
+  freed. Irreversible, so it refuses unless `confirm=true`; the workspace itself
+  is always kept.
 - **Structured tool results.** `opentoonz_list_workspaces`, `opentoonz_scene_info`
   and the `opentoonz_render*` tools now return a machine-readable payload beside
   the human summary (`models.py`: `SceneReport`, `WorkspaceReport`,

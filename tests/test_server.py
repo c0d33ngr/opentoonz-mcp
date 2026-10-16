@@ -24,6 +24,7 @@ EXPECTED_TOOLS = {
     "opentoonz_render",
     "opentoonz_render_video",
     "opentoonz_render_gif",
+    "opentoonz_clean",
     "opentoonz_run_script",
 }
 
@@ -162,3 +163,28 @@ def test_scene_info_returns_structured_content(context, monkeypatch):
     assert res.structured_content["frames"] == 3
     assert res.structured_content["levels"][0]["name"] == "ball"
     assert res.structured_content["cells"][0]["fid"] == "1"
+
+
+def test_opentoonz_clean_refuses_without_confirmation(context, monkeypatch):
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    ws, _ = W.create(context, "w")
+    (ws.render / "clip.mp4").write_bytes(b"x")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    res = _call("opentoonz_clean", workspace="w")
+    assert res.is_error and "confirm" in res.content[0].text
+    assert (ws.render / "clip.mp4").is_file()  # nothing was touched
+
+
+def test_opentoonz_clean_removes_files_with_confirmation(context, monkeypatch):
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    ws, _ = W.create(context, "w")
+    (ws.render / "clip.mp4").write_bytes(b"x" * 50)
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    res = _call("opentoonz_clean", workspace="w", confirm=True)
+    assert not res.is_error
+    assert res.structured_content["bytes_freed"] >= 50
+    assert not (ws.render / "clip.mp4").exists()
