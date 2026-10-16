@@ -15,7 +15,7 @@ from PIL import Image
 
 from opentoonz_mcp import render
 from opentoonz_mcp import workspace as W
-from opentoonz_mcp.errors import RenderError
+from opentoonz_mcp.errors import OpentoonzMCPError, RenderError
 
 
 @pytest.fixture()
@@ -228,3 +228,73 @@ def test_render_rejects_a_traversing_scene_name(prepared):
     _scene(prepared)
     with pytest.raises(W.WorkspaceError, match="scene name"):
         render.render_frames(prepared, "w", "../evil")
+
+
+# -- frame extraction (B5) -----------------------------------------------------
+def _extractor(count=3):
+    """An ffmpeg stand-in that writes ``count`` numbered PNGs at the pattern."""
+
+    def handler(argv):
+        pattern = Path(argv[-1])
+        template = pattern.name.replace("%04d", "{:04d}")
+        for index in range(1, count + 1):
+            Image.new("RGBA", (16, 9), (0, 0, 255, 255)).save(pattern.parent / template.format(index))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    return handler
+
+
+def test_extract_frames_writes_a_level(prepared, monkeypatch, tmp_path):
+    W.create(prepared, "w")
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"not really a video")
+    calls = _fake(monkeypatch, {"ffmpeg": _extractor(3)})
+    frames = render.extract_frames(prepared, "w", "shot", str(video))
+    assert [p.name for p in frames] == ["shot.0001.png", "shot.0002.png", "shot.0003.png"]
+    assert "-vf" not in calls[-1]  # no resample or resize by default
+
+
+def test_extract_frames_builds_its_filters(prepared, monkeypatch, tmp_path):
+    W.create(prepared, "w")
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"x")
+    calls = _fake(monkeypatch, {"ffmpeg": _extractor(1)})
+    render.extract_frames(prepared, "w", "shot", str(video), fps=12, start=1.5, end=4, max_width=320)
+    cmd = calls[-1]
+    assert cmd[cmd.index("-ss") + 1] == "1.5"
+    assert cmd[cmd.index("-to") + 1] == "4"
+    assert cmd[cmd.index("-vf") + 1] == "fps=12,scale=320:-2"
+
+
+def test_extract_frames_clears_previous_drawings(prepared, monkeypatch, tmp_path):
+    ws, _ = W.create(prepared, "w")
+    (ws.drawings / "shot.0005.png").write_bytes(b"old")
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"x")
+    _fake(monkeypatch, {"ffmpeg": _extractor(2)})
+    frames = render.extract_frames(prepared, "w", "shot", str(video))
+    assert len(frames) == 2
+    assert not (ws.drawings / "shot.0005.png").exists()
+
+
+@pytest.mark.parametrize("kwargs", [{"fps": 0}, {"max_width": 0}, {"start": -1}, {"end": -1}, {"start": 5, "end": 2}])
+def test_extract_frames_validates_its_inputs(prepared, monkeypatch, tmp_path, kwargs):
+    W.create(prepared, "w")
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"x")
+    with pytest.raises(RenderError):
+        render.extract_frames(prepared, "w", "shot", str(video), **kwargs)
+
+
+def test_extract_frames_rejects_a_missing_video(prepared):
+    W.create(prepared, "w")
+    with pytest.raises(RenderError, match="Video not found"):
+        render.extract_frames(prepared, "w", "shot", "/nope/clip.mp4")
+
+
+def test_extract_frames_rejects_a_bad_level_name(prepared, tmp_path):
+    W.create(prepared, "w")
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"x")
+    with pytest.raises(OpentoonzMCPError, match="Invalid level name"):
+        render.extract_frames(prepared, "w", "../evil", str(video))

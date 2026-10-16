@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`opentoonz_extract_frames`** — pulls a video's frames into `drawings/` as a
+  level with ffmpeg, so outside footage can join a scene. Optional resample
+  (`fps`), trim (`start`/`end`, seconds) and downscale (`max_width`).
 - **Baked effect ops** — `blur`, `glow`, `adjust`, `vignette`, `outline` and
   `grain`. They post-process everything drawn before them, in order. OpenToonz FX
   nodes are GUI-only, so effects are baked into the frame instead.

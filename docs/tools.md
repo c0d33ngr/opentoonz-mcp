@@ -84,6 +84,17 @@ per row on the xsheet, starting at `start_row` in `column`.
 - Level names must be 1–64 characters of `A-Z a-z 0-9 _ -` (they become file
   prefixes).
 
+### `opentoonz_extract_frames(workspace, level_name, video, fps=None, start=None, end=None, max_width=None) -> str`
+Extracts a video's frames into `drawings/<level_name>.%04d.png` with ffmpeg —
+the way outside footage joins a scene. Pass the returned paths straight to
+`opentoonz_import_images_as_level`.
+
+- `fps` resamples (default keeps the source rate), `start`/`end` are in seconds,
+  and `max_width` downscales so a large source does not fill the workspace.
+- Frames are written as **RGBA PNG**, which OpenToonz requires at render time.
+- Previous drawings for the same level are cleared first, so a shorter extract
+  cannot leave orphaned frames behind.
+
 ### `opentoonz_scene_info(workspace, scene, max_rows=1000) -> str`
 Reports `frames=`, `columns=`, then one line per level and per cell. The cell map
 is scanned row by row, so it stops at `max_rows` (default 1000) and says

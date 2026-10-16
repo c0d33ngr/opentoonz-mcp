@@ -19,6 +19,7 @@ from . import bridge
 from . import workspace as workspace_mod
 from .context import Context
 from .errors import RenderError, WorkspaceError
+from .scenes import validate_level_name
 
 #: tcomposer writes ``<prefix>NNNN.png``.
 _FRAME_RE = re.compile(r"\d+\.png$")
@@ -183,8 +184,12 @@ def render_frame(
     return result
 
 
-def _run_ffmpeg(context: Context, cmd: list[str], output: Path, label: str) -> None:
-    """Run ffmpeg and translate its failure modes into RenderError."""
+def _run_ffmpeg(context: Context, cmd: list[str], output: Path | None, label: str) -> None:
+    """Run ffmpeg and translate its failure modes into RenderError.
+
+    ``output`` is the single file to expect; pass ``None`` for a command that
+    writes a numbered sequence instead, and check the frames yourself.
+    """
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=context.settings.render_timeout, errors="replace"
@@ -193,7 +198,7 @@ def _run_ffmpeg(context: Context, cmd: list[str], output: Path, label: str) -> N
         raise RenderError(f"ffmpeg not found: {context.settings.ffmpeg} — install ffmpeg to write {label}.") from exc
     except subprocess.TimeoutExpired as exc:
         raise RenderError(f"ffmpeg timed out after {context.settings.render_timeout}s") from exc
-    if proc.returncode != 0 or not output.exists():
+    if proc.returncode != 0 or (output is not None and not output.exists()):
         raise RenderError(f"ffmpeg failed (exit={proc.returncode}).\n{proc.stderr[-1500:]}")
 
 
@@ -307,3 +312,70 @@ def render_gif(
     ]
     _run_ffmpeg(context, cmd, gif, "GIF")
     return gif, result
+
+
+@workspace_mod.locked
+def extract_frames(
+    context: Context,
+    workspace: str,
+    level_name: str,
+    video: str,
+    *,
+    fps: float | None = None,
+    start: float | None = None,
+    end: float | None = None,
+    max_width: int | None = None,
+) -> list[Path]:
+    """Extract a video's frames into ``drawings/`` as a level's drawings.
+
+    The frames are named ``<level_name>.%04d.png``, exactly what
+    ``opentoonz_import_images_as_level`` expects, so outside footage can join a
+    scene as a level. ``fps`` resamples (default keeps the source rate),
+    ``start``/``end`` are seconds, and ``max_width`` downscales so a large source
+    does not fill the workspace.
+    """
+    ws = workspace_mod.require(context, workspace)
+    validate_level_name(level_name)
+    source = Path(video).expanduser()
+    if not source.is_file():
+        raise RenderError(f"Video not found: {source}")
+    if fps is not None and float(fps) <= 0:
+        raise RenderError(f"fps must be greater than 0, got {fps!r}")
+    if max_width is not None and int(max_width) <= 0:
+        raise RenderError(f"max_width must be greater than 0, got {max_width!r}")
+    if start is not None and float(start) < 0:
+        raise RenderError(f"start must not be negative, got {start!r}")
+    if end is not None and float(end) < 0:
+        raise RenderError(f"end must not be negative, got {end!r}")
+    if start is not None and end is not None and float(end) <= float(start):
+        raise RenderError(f"end must be after start, got start={start!r} end={end!r}")
+
+    ws.drawings.mkdir(parents=True, exist_ok=True)
+    # A shorter extract must not leave the previous run's drawings behind, or the
+    # level would silently grow frames that no longer exist in the video.
+    numbered = re.compile(rf"{re.escape(level_name)}\.\d+\.png$")
+    for stale in ws.drawings.glob(f"{level_name}.*.png"):
+        if numbered.match(stale.name):
+            stale.unlink()
+
+    filters = []
+    if fps is not None:
+        filters.append(f"fps={float(fps):g}")
+    if max_width is not None:
+        filters.append(f"scale={int(max_width)}:-2")
+    pattern = str(ws.drawings / f"{level_name}.%04d.png")
+    cmd = [context.settings.ffmpeg, "-y"]
+    if start is not None:
+        cmd += ["-ss", f"{float(start):g}"]
+    if end is not None:
+        cmd += ["-to", f"{float(end):g}"]
+    cmd += ["-i", str(source)]
+    if filters:
+        cmd += ["-vf", ",".join(filters)]
+    cmd += ["-pix_fmt", "rgba", pattern]
+    _run_ffmpeg(context, cmd, None, "frames")
+
+    frames = [path for path in sorted(ws.drawings.glob(f"{level_name}.*.png")) if numbered.match(path.name)]
+    if not frames:
+        raise RenderError(f"ffmpeg produced no frames from {source} — is it a readable video?")
+    return frames

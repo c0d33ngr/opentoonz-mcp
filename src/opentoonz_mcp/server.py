@@ -284,6 +284,33 @@ def opentoonz_import_images_as_level(
 
 
 @mcp.tool()
+def opentoonz_extract_frames(
+    workspace: str,
+    level_name: str,
+    video: str,
+    fps: float | None = None,
+    start: float | None = None,
+    end: float | None = None,
+    max_width: int | None = None,
+) -> str:
+    """Extract a video's frames into drawings/<level_name>.%04d.png, as a level.
+
+    How outside footage joins a scene: extract, then pass the returned paths to
+    opentoonz_import_images_as_level. fps resamples (default keeps the source
+    rate), start/end are seconds, and max_width downscales so a large source does
+    not fill the workspace. Previous drawings for the same level are cleared
+    first, so a shorter extract cannot leave orphaned frames.
+    """
+    try:
+        frames = render_mod.extract_frames(
+            get_context(), workspace, level_name, video, fps=fps, start=start, end=end, max_width=max_width
+        )
+    except OpentoonzMCPError as exc:
+        return _fail(exc)
+    return f"OK: extracted {len(frames)} frames for level '{level_name}'\n" + "\n".join(str(path) for path in frames)
+
+
+@mcp.tool()
 def opentoonz_scene_info(workspace: str, scene: str, max_rows: int = scenes.DEFAULT_MAX_ROWS) -> ToolResult:
     """Report a scene's frame/column counts, its levels, and its cell map.
 

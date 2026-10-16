@@ -507,3 +507,37 @@ def test_tween_frames_import_and_render(live_context):
     rendered = R.render_frames(ctx, "tween", "main", out_name="tween")
     assert len(rendered.frames) == 4
     assert _pixels(rendered.frames[0]) != _pixels(rendered.frames[-1])
+
+
+def test_extract_frames_from_a_video(live_context, tmp_path):
+    """Outside footage becomes a level: extract with ffmpeg, import, render."""
+    ctx = live_context
+    W.create(ctx, "footage")
+    scenes.scene_new(ctx, "footage", "main", width=160, height=90)
+    video = tmp_path / "clip.mp4"
+    subprocess.run(
+        [
+            ctx.settings.ffmpeg,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=160x90:rate=8:duration=1",
+            "-pix_fmt",
+            "yuv420p",
+            str(video),
+        ],
+        capture_output=True,
+        check=True,
+    )
+    frames = R.extract_frames(ctx, "footage", "clip", str(video), fps=8)
+    assert len(frames) == 8
+    with Image.open(frames[0]) as img:
+        assert img.mode == "RGBA"
+
+    imported = scenes.import_level(ctx, "footage", "clip", [str(path) for path in frames], "main")
+    assert imported.result.ok, imported.result.summary()
+    assert imported.frame_count == 8
+
+    rendered = R.render_frames(ctx, "footage", "main", out_name="clip")
+    assert len(rendered.frames) == 8

@@ -15,6 +15,7 @@ EXPECTED_TOOLS = {
     "opentoonz_set_scene_settings",
     "opentoonz_scene_info",
     "opentoonz_import_images_as_level",
+    "opentoonz_extract_frames",
     "opentoonz_set_cells",
     "opentoonz_exposure",
     "opentoonz_camera_move",
@@ -211,3 +212,17 @@ def test_opentoonz_tween_frames_writes_a_sequence(context, monkeypatch, tmp_path
     assert out.startswith("OK")
     assert (ws.drawings / "ball.0001.png").is_file()
     assert (ws.drawings / "ball.0003.png").is_file()
+
+
+def test_opentoonz_extract_frames_returns_the_paths(context, monkeypatch):
+    from opentoonz_mcp import render as render_mod
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    ws, _ = W.create(context, "w")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    frames = [ws.drawings / f"shot.{index:04d}.png" for index in (1, 2)]
+    monkeypatch.setattr(render_mod, "extract_frames", lambda *a, **k: frames)
+    out = server.opentoonz_extract_frames("w", "shot", "/tmp/clip.mp4")
+    assert out.startswith("OK: extracted 2 frames")
+    assert "shot.0002.png" in out

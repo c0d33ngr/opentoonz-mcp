@@ -153,6 +153,7 @@ OPENTOONZ_RUNTIME=/path/to/squashfs-root python examples/camera_move.py   # ease
 | `opentoonz_scene_new` | Create a scene, optionally setting resolution/fps |
 | `opentoonz_set_scene_settings` | Change camera resolution / fps |
 | `opentoonz_import_images_as_level` | Image sequence → raster level (additive, re-runnable) |
+| `opentoonz_extract_frames` | Video → PNG drawings, as a level (via ffmpeg) |
 | `opentoonz_scene_info` | Frames/columns/levels/cells |
 | `opentoonz_set_cells` | Place cells on the xsheet |
 | `opentoonz_exposure` | Hold each drawing for N frames (animate on 1s/2s/3s) |
