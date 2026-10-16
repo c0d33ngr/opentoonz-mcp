@@ -411,3 +411,94 @@ def draw_frame(
     """Draw one frame from ops and save it as an RGBA PNG."""
     frame = Frame(width=width, height=height, background=background).apply(ops)
     return frame.save(path)
+
+
+# -- tweening ------------------------------------------------------------------
+#: Keys a tween endpoint accepts, and the neutral value for each.
+_PLACEMENT_DEFAULTS: dict[str, Any] = {
+    "xy": (0.0, 0.0),
+    "scale": 1.0,
+    "rotation": 0.0,
+    "opacity": 1.0,
+}
+
+
+def _placement(endpoint: dict[str, Any], *, label: str) -> dict[str, Any]:
+    """Normalise one tween endpoint, checking every field up front."""
+    if not isinstance(endpoint, dict) or "path" not in endpoint:
+        raise OpentoonzMCPError(f"The {label} of a tween must be a dict with a 'path', got {endpoint!r}")
+    unknown = sorted(set(endpoint) - {"path", *_PLACEMENT_DEFAULTS})
+    if unknown:
+        raise OpentoonzMCPError(
+            f"Unknown key(s) for the {label} of a tween: {', '.join(unknown)}. "
+            f"Allowed: {', '.join(sorted({'path', *_PLACEMENT_DEFAULTS}))}."
+        )
+    source = Path(endpoint["path"])
+    if not source.is_file():
+        raise OpentoonzMCPError(f"Image not found: {source}")
+    xy = endpoint.get("xy", _PLACEMENT_DEFAULTS["xy"])
+    return {
+        "path": source,
+        "xy": (float(xy[0]), float(xy[1])),
+        "scale": float(endpoint.get("scale", _PLACEMENT_DEFAULTS["scale"])),
+        "rotation": float(endpoint.get("rotation", _PLACEMENT_DEFAULTS["rotation"])),
+        "opacity": float(endpoint.get("opacity", _PLACEMENT_DEFAULTS["opacity"])),
+    }
+
+
+def _placed_layer(image: Image.Image, scale: float, rotation: float, opacity: float) -> Image.Image:
+    """Scale, rotate (about its centre) and fade a copy of ``image``."""
+    layer = image
+    if scale != 1.0:
+        size = (max(1, round(image.width * scale)), max(1, round(image.height * scale)))
+        layer = layer.resize(size, Image.LANCZOS)
+    if rotation:
+        layer = layer.rotate(rotation, resample=Image.BICUBIC, expand=True)
+    if opacity != 1.0:
+        layer = layer.copy()
+        layer.putalpha(layer.getchannel("A").point(lambda value: int(value * opacity)))
+    return layer
+
+
+def tween(
+    start: dict[str, Any],
+    end: dict[str, Any],
+    count: int,
+    *,
+    width: int = DEFAULT_WIDTH,
+    height: int = DEFAULT_HEIGHT,
+    background: Any = DEFAULT_BACKGROUND,
+    ease: bool = False,
+) -> list[Image.Image]:
+    """Render ``count`` frames moving one drawing from ``start`` to ``end``.
+
+    OpenToonz's auto-inbetweening is GUI-only, so in-betweens are produced here
+    and imported as a level. Each endpoint is ``{"path", "xy", "scale",
+    "rotation", "opacity"}``; ``xy`` is the drawing's **centre**, so motion and
+    rotation share one anchor. ``ease=True`` applies a smoothstep to the timing,
+    so the move leaves and arrives gently instead of at a constant speed.
+    """
+    if count < 2:
+        raise OpentoonzMCPError(f"a tween needs at least 2 frames, got {count!r}")
+    first = _placement(start, label="start")
+    last = _placement(end, label="end")
+    with Image.open(first["path"]) as opened:
+        art = opened.convert("RGBA")
+
+    fill = (0, 0, 0, 0) if background is None else parse_color(background)
+    frames: list[Image.Image] = []
+    for index in range(int(count)):
+        t = index / (count - 1)
+        if ease:
+            t = t * t * (3 - 2 * t)  # smoothstep
+        blend = {key: first[key] + (last[key] - first[key]) * t for key in ("scale", "rotation", "opacity")}
+        centre = (
+            first["xy"][0] + (last["xy"][0] - first["xy"][0]) * t,
+            first["xy"][1] + (last["xy"][1] - first["xy"][1]) * t,
+        )
+        canvas = Image.new("RGBA", (int(width), int(height)), fill)
+        layer = _placed_layer(art, blend["scale"], blend["rotation"], blend["opacity"])
+        overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        overlay.paste(layer, (round(centre[0] - layer.width / 2), round(centre[1] - layer.height / 2)))
+        frames.append(Image.alpha_composite(canvas, overlay))
+    return frames

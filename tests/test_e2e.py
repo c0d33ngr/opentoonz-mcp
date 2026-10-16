@@ -471,3 +471,39 @@ def test_clean_reclaims_workspace_space(live_context):
     assert 0 < freed <= before
     assert W.disk_usage(ws) < before
     assert ws.root.is_dir()  # the workspace itself is kept
+
+
+def test_tween_frames_import_and_render(live_context):
+    """Tweened in-betweens must survive import and render as real motion."""
+    ctx = live_context
+    ws, _ = W.create(ctx, "tween")
+    scenes.scene_new(ctx, "tween", "main", width=640, height=200)
+    sprite = ws.drawings / "sprite.png"
+    draw.draw_frame(
+        sprite,
+        [{"op": "ellipse", "box": [0, 0, 60, 60], "fill": "#ff6b6b"}],
+        width=60,
+        height=60,
+        background=None,
+    )
+    images = draw.tween(
+        {"path": str(sprite), "xy": [100, 100]},
+        {"path": str(sprite), "xy": [540, 100]},
+        4,
+        width=640,
+        height=200,
+        background="#101828",
+    )
+    frames = []
+    for index, image in enumerate(images, start=1):
+        path = ws.drawings / f"ball.{index:04d}.png"
+        image.save(path, format="PNG")
+        frames.append(str(path))
+
+    imported = scenes.import_level(ctx, "tween", "ball", frames, "main")
+    assert imported.result.ok, imported.result.summary()
+    assert imported.frame_count == 4
+
+    rendered = R.render_frames(ctx, "tween", "main", out_name="tween")
+    assert len(rendered.frames) == 4
+    assert _pixels(rendered.frames[0]) != _pixels(rendered.frames[-1])

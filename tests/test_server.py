@@ -20,6 +20,7 @@ EXPECTED_TOOLS = {
     "opentoonz_camera_move",
     "opentoonz_draw_frame",
     "opentoonz_draw_frames",
+    "opentoonz_tween_frames",
     "opentoonz_render_frame",
     "opentoonz_render",
     "opentoonz_render_video",
@@ -188,3 +189,25 @@ def test_opentoonz_clean_removes_files_with_confirmation(context, monkeypatch):
     assert not res.is_error
     assert res.structured_content["bytes_freed"] >= 50
     assert not (ws.render / "clip.mp4").exists()
+
+
+def test_opentoonz_tween_frames_writes_a_sequence(context, monkeypatch, tmp_path):
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    ws, _ = W.create(context, "w")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    sprite = tmp_path / "s.png"
+    Image.new("RGBA", (10, 10), (255, 0, 0, 255)).save(sprite)
+    out = server.opentoonz_tween_frames(
+        "w",
+        "ball",
+        {"path": str(sprite), "xy": [10, 10]},
+        {"path": str(sprite), "xy": [30, 10]},
+        3,
+        width=40,
+        height=20,
+    )
+    assert out.startswith("OK")
+    assert (ws.drawings / "ball.0001.png").is_file()
+    assert (ws.drawings / "ball.0003.png").is_file()

@@ -1,6 +1,7 @@
 import pytest
 from PIL import Image
 
+from opentoonz_mcp import draw as draw_mod
 from opentoonz_mcp.draw import Frame, draw_frame, parse_color
 from opentoonz_mcp.errors import OpentoonzMCPError
 
@@ -239,3 +240,66 @@ def test_image_op_rejects_bad_arguments(tmp_path, kwargs):
     art = _art(tmp_path / "art.png")
     with pytest.raises(OpentoonzMCPError):
         Frame(32, 32, background=None).apply([{"op": "image", "path": str(art), "xy": [0, 0], **kwargs}])
+
+
+# -- tweening (B1) -------------------------------------------------------------
+def _sprite(tmp_path, name="sprite.png", size=20):
+    path = tmp_path / name
+    Image.new("RGBA", (size, size), (255, 0, 0, 255)).save(path)
+    return path
+
+
+def test_tween_interpolates_position(tmp_path):
+    """xy is the drawing's centre, so a straight move lands on even steps."""
+    sprite = _sprite(tmp_path)
+    frames = draw_mod.tween(
+        {"path": str(sprite), "xy": [10, 20]},
+        {"path": str(sprite), "xy": [110, 20]},
+        3,
+        width=120,
+        height=40,
+    )
+    assert len(frames) == 3
+    assert frames[0].getpixel((10, 20))[:3] == (255, 0, 0)
+    assert frames[1].getpixel((60, 20))[:3] == (255, 0, 0)
+    assert frames[2].getpixel((110, 20))[:3] == (255, 0, 0)
+
+
+def test_tween_interpolates_opacity(tmp_path):
+    sprite = _sprite(tmp_path)
+    frames = draw_mod.tween(
+        {"path": str(sprite), "xy": [20, 20], "opacity": 1.0},
+        {"path": str(sprite), "xy": [20, 20], "opacity": 0.0},
+        3,
+        width=40,
+        height=40,
+        background=None,
+    )
+    assert frames[0].getpixel((20, 20))[3] == 255
+    assert frames[2].getpixel((20, 20))[3] == 0
+    assert 0 < frames[1].getpixel((20, 20))[3] < 255
+
+
+def test_tween_ease_slows_the_start(tmp_path):
+    sprite = _sprite(tmp_path)
+    start, end = {"path": str(sprite), "xy": [10, 20]}, {"path": str(sprite), "xy": [110, 20]}
+    linear = draw_mod.tween(start, end, 5, width=120, height=40, background=None)
+    eased = draw_mod.tween(start, end, 5, width=120, height=40, background=None, ease=True)
+
+    def centre_x(frame):
+        box = frame.getchannel("A").getbbox()
+        return (box[0] + box[2]) / 2
+
+    assert centre_x(eased[1]) < centre_x(linear[1])  # barely left the pose
+    assert centre_x(eased[-1]) == centre_x(linear[-1])  # still arrives
+
+
+def test_tween_needs_at_least_two_frames(tmp_path):
+    sprite = _sprite(tmp_path)
+    with pytest.raises(OpentoonzMCPError, match="at least 2"):
+        draw_mod.tween({"path": str(sprite)}, {"path": str(sprite)}, 1)
+
+
+def test_tween_rejects_a_missing_image(tmp_path):
+    with pytest.raises(OpentoonzMCPError, match="Image not found"):
+        draw_mod.tween({"path": str(tmp_path / "nope.png")}, {"path": str(tmp_path / "nope.png")}, 3)

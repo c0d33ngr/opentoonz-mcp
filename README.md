@@ -159,6 +159,7 @@ OPENTOONZ_RUNTIME=/path/to/squashfs-root python examples/camera_move.py   # ease
 | `opentoonz_camera_move` | Animate the camera (pan / zoom / rotate), with per-segment easing |
 | `opentoonz_draw_frame` | Draw one RGBA frame (PIL primitives + image compositing) |
 | `opentoonz_draw_frames` | Draw a whole sequence |
+| `opentoonz_tween_frames` | Tween a drawing between two poses (move/scale/rotate/fade) |
 | `opentoonz_render_frame` | Render one frame, returned inline as an image |
 | `opentoonz_render` | Render PNG frames via `tcomposer` (optional frame range) |
 | `opentoonz_render_video` | Render + ffmpeg → MP4 (optional audio, crf, scale) |

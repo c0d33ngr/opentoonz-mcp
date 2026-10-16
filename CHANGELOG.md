@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`opentoonz_tween_frames`** — renders in-between frames moving one drawing from
+  a start pose to an end pose (position, scale, rotation, opacity), with optional
+  smoothstep easing, and saves them ready to import as a level. OpenToonz's
+  auto-inbetweening is GUI-only, so the in-betweens are produced in the image
+  pipeline.
 - **Six more drawing ops** — `round_rect`, `star`, `arc`, `bezier`, `curve` and
   `gradient`. Frames can now carry rounded panels, stars, wedges, smooth splines
   (`curve` passes through every point; `bezier` is a cubic) and linear gradients

@@ -163,6 +163,24 @@ Draws one frame to `drawings/<level_name>.<frame:04d>.png`.
 `frames` is a list where each item is that frame's list of ops (frame 1 first).
 Returns the saved paths.
 
+### `opentoonz_tween_frames(workspace, level_name, start, end, frames, width=1920, height=1080, background="#181a2e", ease=False) -> str`
+Renders in-between frames moving one drawing from a `start` pose to an `end` pose
+and saves them as `drawings/<level_name>.%04d.png`, ready for
+`opentoonz_import_images_as_level`.
+
+OpenToonz's auto-inbetweening is GUI-only (see
+[api-surface.md](api-surface.md)), so in-betweens are produced in the image
+pipeline instead. `start`/`end` each describe the drawing:
+
+```json
+{"path": "/abs/sprite.png", "xy": [960, 540], "scale": 1.0, "rotation": 0, "opacity": 1.0}
+```
+
+`xy` is the drawing's **centre**, so motion and rotation share one anchor; any
+omitted field stays neutral. Every field interpolates across the `frames`
+in-betweens. `ease=true` applies a smoothstep to the timing, so the move leaves
+and arrives gently rather than at a constant speed.
+
 ### Drawing ops
 
 An op is a dict with an `op` key and keyword arguments:

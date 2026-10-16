@@ -450,6 +450,42 @@ def opentoonz_draw_frames(
     return f"OK: drew {len(paths)} frames for level '{level_name}'\n" + "\n".join(paths)
 
 
+@mcp.tool()
+def opentoonz_tween_frames(
+    workspace: str,
+    level_name: str,
+    start: dict,
+    end: dict,
+    frames: int,
+    width: int = draw.DEFAULT_WIDTH,
+    height: int = draw.DEFAULT_HEIGHT,
+    background: str = draw.DEFAULT_BACKGROUND,
+    ease: bool = False,
+) -> str:
+    """Tween one drawing from a start pose to an end pose, saving the sequence.
+
+    OpenToonz's auto-inbetweening is GUI-only, so the in-betweens are rendered
+    here and saved as <workspace>/drawings/<level_name>.%04d.png, ready for
+    opentoonz_import_images_as_level.
+
+    start/end each describe the drawing: {"path": "/abs/sprite.png", "xy": [x, y],
+    "scale": 1.0, "rotation": 0, "opacity": 1.0}. xy is the drawing's CENTRE, so
+    motion and rotation share one anchor; omitted fields stay neutral. ease=true
+    leaves and arrives gently instead of at a constant speed.
+    """
+    try:
+        ws = workspace_mod.require(get_context(), workspace)
+        rendered = draw.tween(start, end, frames, width=width, height=height, background=background, ease=ease)
+        paths = []
+        for index, image in enumerate(rendered, start=1):
+            path = ws.drawings / f"{level_name}.{index:04d}.png"
+            image.save(path, format="PNG")
+            paths.append(str(path))
+    except OpentoonzMCPError as exc:
+        return _fail(exc)
+    return f"OK: tweened {len(paths)} frames for level '{level_name}'\n" + "\n".join(paths)
+
+
 # -- rendering ----------------------------------------------------------------
 def _png_size(path: Path) -> str:
     with Image.open(path) as img:
