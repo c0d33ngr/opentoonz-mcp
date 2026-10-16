@@ -1,6 +1,7 @@
 import re
 
 import pytest
+from PIL import Image
 
 from opentoonz_mcp import draw
 from opentoonz_mcp import scenes as scenes_mod
@@ -313,6 +314,41 @@ def test_import_level_rejects_empty_and_bad_names(context, monkeypatch):
         scenes_mod.import_level(context, "w", "ball", [], "main")
     with pytest.raises(OpentoonzMCPError, match="Invalid level name"):
         scenes_mod.import_level(context, "w", "../evil", ["/dev/null"], "main")
+
+
+def test_import_level_expands_a_directory_in_sorted_order(context, monkeypatch, tmp_path):
+    """A directory is a convenience: its images import in name order."""
+    workspace_mod.create(context, "w")
+    _stub_script(monkeypatch)
+    seq = tmp_path / "seq"
+    seq.mkdir()
+    Image.new("RGBA", (4, 4), (255, 0, 0, 255)).save(seq / "b.png")
+    Image.new("RGBA", (4, 4), (0, 255, 0, 255)).save(seq / "a.png")
+    Image.new("RGBA", (4, 4), (0, 0, 255, 255)).save(seq / "c.png")
+    imported = scenes_mod.import_level(context, "w", "ball", [str(seq)], "main")
+    assert [p.name for p in imported.copied] == ["ball.0001.png", "ball.0002.png", "ball.0003.png"]
+    with Image.open(imported.copied[0]) as first:
+        assert first.convert("RGB").getpixel((0, 0)) == (0, 255, 0)  # a.png sorts first
+
+
+def test_import_level_ignores_non_images_in_a_directory(context, monkeypatch, tmp_path):
+    workspace_mod.create(context, "w")
+    _stub_script(monkeypatch)
+    seq = tmp_path / "seq"
+    seq.mkdir()
+    Image.new("RGBA", (4, 4), (255, 0, 0, 255)).save(seq / "a.png")
+    (seq / "notes.txt").write_text("ignore me", encoding="utf-8")
+    imported = scenes_mod.import_level(context, "w", "ball", [str(seq)], "main")
+    assert [p.name for p in imported.copied] == ["ball.0001.png"]
+
+
+def test_import_level_rejects_a_directory_with_no_images(context, monkeypatch, tmp_path):
+    workspace_mod.create(context, "w")
+    _stub_script(monkeypatch)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    with pytest.raises(OpentoonzMCPError, match="no images"):
+        scenes_mod.import_level(context, "w", "ball", [str(empty)], "main")
 
 
 # -- camera moves (patched into the .tnz XML) ---------------------------------

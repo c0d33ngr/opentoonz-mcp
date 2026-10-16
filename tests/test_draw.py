@@ -64,6 +64,19 @@ def test_op_must_be_a_dict():
         Frame(8, 8, background=None).apply(["rect"])
 
 
+def test_unknown_op_key_is_rejected():
+    """A typo'd key must name itself, not surface a raw TypeError."""
+    with pytest.raises(OpentoonzMCPError, match="bogus"):
+        Frame(8, 8, background=None).apply([{"op": "rect", "xy": [0, 0, 1, 1], "bogus": 1}])
+
+
+def test_op_key_error_lists_the_allowed_keys():
+    with pytest.raises(OpentoonzMCPError) as info:
+        Frame(8, 8, background=None).apply([{"op": "text", "xy": [0, 0], "text": "x", "colour": "#fff"}])
+    message = str(info.value)
+    assert "colour" in message and "fill" in message
+
+
 def test_transparent_background():
     frame = Frame(8, 8, background=None)
     assert frame.image.getpixel((0, 0)) == (0, 0, 0, 0)

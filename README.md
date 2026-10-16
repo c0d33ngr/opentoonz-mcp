@@ -159,8 +159,8 @@ OPENTOONZ_RUNTIME=/path/to/squashfs-root python examples/camera_move.py   # ease
 | `opentoonz_draw_frame` | Draw one RGBA frame (PIL primitives + image compositing) |
 | `opentoonz_draw_frames` | Draw a whole sequence |
 | `opentoonz_render_frame` | Render one frame (the "look"), optionally downscaled |
-| `opentoonz_render` | Render PNG frames via `tcomposer` |
-| `opentoonz_render_video` | Render + ffmpeg → MP4 (optional audio track) |
+| `opentoonz_render` | Render PNG frames via `tcomposer` (optional frame range) |
+| `opentoonz_render_video` | Render + ffmpeg → MP4 (optional audio, crf, scale) |
 | `opentoonz_render_gif` | Render + ffmpeg → looping GIF |
 | `opentoonz_run_script` | Arbitrary OpenToonz JS (escape hatch) |
 

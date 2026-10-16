@@ -41,6 +41,19 @@ DEFAULT_BACKGROUND = "#181a2e"
 #: ``Frame.image`` is the PIL surface, so the ``image`` op needs a real name.
 _OP_ALIASES = {"image": "paste_image"}
 
+#: Allowed keys per op. Checking them turns a typo into a message that names the
+#: key and the alternatives, instead of a raw ``TypeError`` from ``method(**kwargs)``
+#: — and it keeps ``getattr`` from ever reaching an unrelated ``Frame`` method.
+_OP_SCHEMA: dict[str, frozenset[str]] = {
+    "rect": frozenset({"xy", "fill", "outline", "width"}),
+    "ellipse": frozenset({"box", "fill", "outline", "width"}),
+    "line": frozenset({"xy", "fill", "width"}),
+    "polygon": frozenset({"points", "fill", "outline", "width"}),
+    "polyline": frozenset({"points", "fill", "width"}),
+    "text": frozenset({"xy", "text", "fill", "size", "anchor"}),
+    "paste_image": frozenset({"path", "xy", "size", "opacity"}),
+}
+
 _FONT_CANDIDATES = (
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -192,11 +205,16 @@ class Frame:
             if not isinstance(op, dict) or "op" not in op:
                 raise OpentoonzMCPError(f"Each drawing op must be a dict with an 'op' key, got {op!r}")
             name = _OP_ALIASES.get(str(op["op"]), str(op["op"]))
-            method = getattr(self, name, None)
-            if method is None or name.startswith("_"):
+            if name not in _OP_SCHEMA:
                 raise OpentoonzMCPError(f"Unknown drawing op: {name!r}")
             kwargs = {k: v for k, v in op.items() if k != "op"}
-            method(**kwargs)
+            unknown = sorted(set(kwargs) - _OP_SCHEMA[name])
+            if unknown:
+                raise OpentoonzMCPError(
+                    f"Unknown key(s) for drawing op {op['op']!r}: {', '.join(unknown)}. "
+                    f"Allowed: {', '.join(sorted(_OP_SCHEMA[name]))}."
+                )
+            getattr(self, name)(**kwargs)
         return self
 
     def save(self, path: str | Path) -> Path:

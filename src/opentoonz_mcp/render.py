@@ -206,12 +206,17 @@ def render_video(
     out_name: str = "video",
     *,
     audio: str | None = None,
+    crf: int | None = None,
+    scale: float | None = None,
 ) -> tuple[Path, RenderResult]:
     """Render frames and mux them into an MP4 with ffmpeg.
 
     ``audio`` adds a soundtrack from an external file. OpenToonz's own audio
     columns are unreachable from the scripting API, so audio is always supplied
     from outside; it is encoded as AAC and trimmed to the video (``-shortest``).
+
+    ``crf`` (0-51, lower is better) trades quality for size, and ``scale`` (a
+    positive factor, e.g. ``0.5``) resizes the video.
     """
     ws = workspace_mod.require(context, workspace)
     stem = _stem(out_name, "video")
@@ -222,6 +227,10 @@ def render_video(
         track = Path(audio).expanduser()
         if not track.is_file():
             raise RenderError(f"Audio file not found: {track}")
+    if crf is not None and not 0 <= int(crf) <= 51:
+        raise RenderError(f"crf must be between 0 and 51, got {crf!r}")
+    if scale is not None and float(scale) <= 0:
+        raise RenderError(f"scale must be greater than 0, got {scale!r}")
     result = render_frames(context, workspace, scene, out_name=base)
     if not result.frames:
         raise RenderError(f"tcomposer produced no frames (exit={result.exit_code}).\n{result.log}")
@@ -237,7 +246,14 @@ def render_video(
     ]
     if track is not None:
         cmd += ["-i", str(track), "-c:a", "aac", "-shortest"]
-    cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", str(video)]
+    cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p"]
+    if crf is not None:
+        cmd += ["-crf", str(int(crf))]
+    if scale is not None:
+        factor = float(scale)
+        # trunc(.../2)*2 keeps both dimensions even, which yuv420p requires.
+        cmd += ["-vf", f"scale=trunc(iw*{factor}/2)*2:trunc(ih*{factor}/2)*2"]
+    cmd += [str(video)]
     _run_ffmpeg(context, cmd, video, "video")
     return video, result
 

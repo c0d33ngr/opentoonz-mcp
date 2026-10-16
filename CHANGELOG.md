@@ -6,6 +6,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Frame ranges on `opentoonz_render`** — `start`/`end` render an inclusive
+  range (e.g. frames 1–3) instead of the whole scene, so checking a section does
+  not cost a full render.
+- **`opentoonz_render_video(crf=, scale=)`** — control H.264 quality and output
+  size directly.
+- **`opentoonz_import_images_as_level` accepts a directory** in `image_paths`;
+  the raster images inside it import in name order.
+
+### Changed
+- **Scene and output names are validated, not just sanitised.** `scene_path()`
+  no longer accepts an absolute path or one that escapes the workspace via
+  `..`, and render output stems must be a single plain name (they form file names
+  *and* the ffmpeg glob used to clear frames). `Frame.save()` no longer creates
+  missing parent directories.
+- **Drawing ops validate their keys.** A typo'd key is reported by name with the
+  allowed keys, instead of raising a raw `TypeError` from the op dispatch.
+
+### Added (docs)
+- `docs/api-surface.md` — the verified callable / absent scripting-API surface,
+  with the evidence for the descoped cell-deletion (B6) and vector-level (B7)
+  features.
+
 ## [0.4.0] - 2026-10-16
 
 Camera moves — with easing — plus output polish, distribution, and hardening.

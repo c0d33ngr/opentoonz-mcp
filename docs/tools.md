@@ -58,6 +58,9 @@ per row on the xsheet, starting at `start_row` in `column`.
 - Images are converted to **RGBA PNG** (OpenToonz rejects RGB-only images at
   render time) and stored as `drawings/<level_name>.%04d.png`. Art already
   sitting in `drawings/` is left in place.
+- **A directory may be given in `image_paths`** in place of individual files; the
+  raster images inside it are imported in name order. That is the usual shape an
+  exported sequence arrives in, so `image_paths=["/path/to/frames"]` is enough.
 - SVG input is **rejected** — vector levels load but rasterise to nothing (see
   [troubleshooting.md](troubleshooting.md)).
 - Level names must be 1–64 characters of `A-Z a-z 0-9 _ -` (they become file
@@ -158,6 +161,9 @@ An op is a dict with an `op` key and keyword arguments:
 
 Colours accept `#rgb`, `#rrggbb`, `#rrggbbaa`, or `[r, g, b(, a)]`.
 
+Keys are validated against this table, so a typo is reported by name together
+with the allowed keys rather than surfacing as a Python `TypeError`.
+
 `background` may be a colour or `null` for transparency.
 
 The `image` op composites an existing PNG onto the frame — how art made elsewhere
@@ -191,16 +197,23 @@ costs fewer image tokens; the reply reports the size, e.g. `(960x540, downscaled
 from 1920x1080)`. Only this preview is affected — `opentoonz_render` and
 `opentoonz_render_video` frames are never downscaled.
 
-### `opentoonz_render(workspace, scene, out_name="render") -> str`
+### `opentoonz_render(workspace, scene, out_name="render", start=None, end=None) -> str`
 Renders the scene to `render/<out_name>_NNNN.png` with `tcomposer`. Any stale
 frames with the same name are removed first, so counts are always accurate.
 
-### `opentoonz_render_video(workspace, scene, fps=24, out_name="video", audio=None) -> str`
+`start` and `end` (give **both or neither**) render an inclusive frame range
+instead of the whole scene — e.g. `start=1, end=3` — which is much cheaper when
+you only need a section.
+
+### `opentoonz_render_video(workspace, scene, fps=24, out_name="video", audio=None, crf=None, scale=None) -> str`
 Renders then muxes the frames into `render/<out_name>.mp4` with ffmpeg.
 
 `audio` is an optional path to an external soundtrack (mp3, wav, ...). It is
 encoded as AAC and cut to the video's length. OpenToonz's own audio columns
 cannot be reached from the scripting API, so audio always comes from a file.
+
+`crf` (0–51, lower is better) trades quality for file size, and `scale` (a
+positive factor, e.g. `0.5`) resizes the video.
 
 ### `opentoonz_render_gif(workspace, scene, fps=12, out_name="reel", max_width=None, colors=256) -> str`
 Renders then turns the frames into `render/<out_name>.gif` — a looping file, the

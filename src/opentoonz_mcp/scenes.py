@@ -568,6 +568,11 @@ def camera_move(
 
 
 # -- level import -------------------------------------------------------------
+#: Raster formats ``import_level`` accepts. SVG is deliberately excluded: it
+#: loads as a ``Vector`` level but rasterises to nothing headlessly (fact 23).
+_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp", ".gif"})
+
+
 def _numbered_drawings(level_name: str) -> re.Pattern[str]:
     """Matches exactly the frames belonging to ``level_name`` (not 'balloon')."""
     return re.compile(rf"^{re.escape(level_name)}\.\d{{4}}\.png$")
@@ -600,10 +605,20 @@ def import_level(
     ws.drawings.mkdir(parents=True, exist_ok=True)
 
     # Validate every source before touching anything, so one bad path cannot
-    # leave the workspace half-imported.
+    # leave the workspace half-imported. A directory is expanded to the raster
+    # images inside it, in name order — the usual shape an exported sequence
+    # arrives in.
     sources: list[Path] = []
     for src in image_paths:
         src_path = Path(src)
+        if src_path.is_dir():
+            found = sorted(
+                child for child in src_path.iterdir() if child.is_file() and child.suffix.lower() in _IMAGE_SUFFIXES
+            )
+            if not found:
+                raise OpentoonzMCPError(f"Directory contains no images: {src}")
+            sources.extend(child.resolve() for child in found)
+            continue
         if not src_path.is_file():
             raise OpentoonzMCPError(f"Image not found: {src}")
         if src_path.suffix.lower() == ".svg":

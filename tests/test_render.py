@@ -109,6 +109,23 @@ def test_render_frames_explains_a_missing_scene(prepared):
         render.render_frames(prepared, "w", "nope")
 
 
+def test_render_frames_passes_a_frame_range(prepared, monkeypatch):
+    _scene(prepared)
+    calls = _fake(monkeypatch, {"tcomposer": _tcomposer((64, 36))})
+    render.render_frames(prepared, "w", "main", frame_range=(1, 3))
+    cmd = calls[-1]
+    at = cmd.index("-range")
+    assert cmd[at + 1 : at + 3] == ["1", "3"]
+
+
+def test_render_frames_passes_a_single_frame(prepared, monkeypatch):
+    _scene(prepared)
+    calls = _fake(monkeypatch, {"tcomposer": _tcomposer((64, 36))})
+    render.render_frames(prepared, "w", "main", frame=4)
+    cmd = calls[-1]
+    assert cmd[cmd.index("-frame") + 1] == "4"
+
+
 def test_a_missing_tcomposer_is_explained(prepared, monkeypatch):
     _scene(prepared)
 
@@ -139,6 +156,30 @@ def test_render_video_without_audio_stays_video_only(prepared, monkeypatch):
     calls = _fake(monkeypatch, {"tcomposer": _tcomposer((64, 36)), "ffmpeg": _writes_output()})
     render.render_video(prepared, "w", "main")
     assert "-c:a" not in calls[-1]
+
+
+def test_render_video_applies_crf_and_scale(prepared, monkeypatch):
+    _scene(prepared)
+    calls = _fake(monkeypatch, {"tcomposer": _tcomposer((64, 36)), "ffmpeg": _writes_output()})
+    render.render_video(prepared, "w", "main", crf=18, scale=0.5)
+    cmd = calls[-1]
+    assert cmd[cmd.index("-crf") + 1] == "18"
+    # even dimensions, because libx264 + yuv420p rejects odd ones
+    assert cmd[cmd.index("-vf") + 1] == "scale=trunc(iw*0.5/2)*2:trunc(ih*0.5/2)*2"
+
+
+def test_render_video_without_crf_or_scale_stays_default(prepared, monkeypatch):
+    _scene(prepared)
+    calls = _fake(monkeypatch, {"tcomposer": _tcomposer((64, 36)), "ffmpeg": _writes_output()})
+    render.render_video(prepared, "w", "main")
+    assert "-crf" not in calls[-1] and "-vf" not in calls[-1]
+
+
+@pytest.mark.parametrize("kwargs", [{"crf": -1}, {"crf": 52}, {"scale": 0}, {"scale": -1}])
+def test_render_video_rejects_bad_crf_or_scale(prepared, kwargs):
+    _scene(prepared)
+    with pytest.raises(RenderError, match="crf|scale"):
+        render.render_video(prepared, "w", "main", **kwargs)
 
 
 def test_render_video_rejects_a_missing_track_before_rendering(prepared):

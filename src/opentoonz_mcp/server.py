@@ -409,15 +409,30 @@ def opentoonz_render_frame(
 
 
 @mcp.tool()
-def opentoonz_render(workspace: str, scene: str, out_name: str = "render") -> str:
-    """Render a scene to PNG frames under <workspace>/render/ with tcomposer."""
+def opentoonz_render(
+    workspace: str,
+    scene: str,
+    out_name: str = "render",
+    start: int | None = None,
+    end: int | None = None,
+) -> str:
+    """Render a scene to PNG frames under <workspace>/render/ with tcomposer.
+
+    By default the whole scene renders. Give start and end together to render an
+    inclusive frame range instead — e.g. start=1, end=3 for frames 1-3 — which
+    is much cheaper when you only need a section.
+    """
+    if (start is None) != (end is None):
+        return _fail(OpentoonzMCPError("start and end must be given together, as an inclusive frame range."))
+    frame_range = None if start is None else (int(start), int(end))
     try:
-        result = render_mod.render_frames(get_context(), workspace, scene, out_name=out_name)
+        result = render_mod.render_frames(get_context(), workspace, scene, out_name=out_name, frame_range=frame_range)
     except OpentoonzMCPError as exc:
         return _fail(exc)
     if not result.frames:
         return f"FAILED (exit={result.exit_code}, {result.duration:.1f}s)\n{result.log}"
-    return f"OK: {len(result.frames)} frames -> {result.frames[0].parent} ({result.duration:.1f}s)"
+    span = f" (frames {start}-{end})" if frame_range else ""
+    return f"OK: {len(result.frames)} frames{span} -> {result.frames[0].parent} ({result.duration:.1f}s)"
 
 
 @mcp.tool()
