@@ -266,18 +266,44 @@ def locked(fn):
     return wrapper
 
 
+def _orphaned_drawings(ws: Workspace) -> list[Path]:
+    """Drawings whose level name no scene in the workspace mentions.
+
+    Deliberately conservative: a name is kept if it appears *anywhere* in any
+    scene file, so a false positive only ever means "kept a file that could have
+    gone". Scene files are small XML, and the level name appears in them as the
+    level's path, so a substring check is enough and needs no XML parsing.
+    """
+    text = "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in sorted(ws.root.glob("*.tnz")))
+    return [path for path in sorted(ws.drawings.glob("*")) if path.is_file() and path.name.split(".")[0] not in text]
+
+
 @locked
 def clean(context: Context, workspace: str, what: str = "all") -> tuple[list[str], int]:
     """Delete a workspace's generated files and report what was freed.
 
-    ``what`` is ``drawings``, ``render``, ``scripts`` or ``all``. Only the
-    *contents* go: the workspace and its subdirectories stay, so a later render
-    or import still finds the layout it expects. This is irreversible, so the
-    ``opentoonz_clean`` tool makes the caller pass ``confirm`` first.
+    ``what`` is ``drawings``, ``render``, ``scripts``, ``all``, or ``orphans``
+    (drawings no scene references). Only the *contents* go: the workspace and its
+    subdirectories stay, so a later render or import still finds the layout it
+    expects. This is irreversible, so the ``opentoonz_clean`` tool makes the
+    caller pass ``confirm`` first.
     """
-    if what != "all" and what not in SUBDIRS:
-        raise WorkspaceError(f"what must be 'all' or one of {list(SUBDIRS)}, got {what!r}")
     ws = require(context, workspace)
+    if what == "orphans":
+        if not any(ws.root.glob("*.tnz")):
+            raise WorkspaceError(
+                "no scenes in this workspace to compare against — refusing to treat every drawing as an orphan"
+            )
+        removed = []
+        freed = 0
+        for path in _orphaned_drawings(ws):
+            with suppress(OSError):  # a concurrent writer may win the race
+                freed += path.stat().st_size
+            path.unlink(missing_ok=True)
+            removed.append(path.name)
+        return removed, freed
+    if what != "all" and what not in SUBDIRS:
+        raise WorkspaceError(f"what must be 'all', 'orphans' or one of {list(SUBDIRS)}, got {what!r}")
     targets = list(SUBDIRS) if what == "all" else [what]
     freed = 0
     for name in targets:

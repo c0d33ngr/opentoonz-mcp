@@ -291,3 +291,18 @@ def test_doctor_only_smokes_when_asked(context, monkeypatch):
 
     monkeypatch.setattr(server, "_smoke", lambda ctx: "OK")
     assert "smoke        : OK" in server.opentoonz_doctor(smoke=True)
+
+
+def test_opentoonz_clean_orphans_reports_what_it_removed(context, monkeypatch):
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    ws, _ = W.create(context, "w")
+    (ws.root / "main.tnz").write_text("<scene>used</scene>", encoding="utf-8")
+    (ws.drawings / "used.0001.png").write_bytes(b"x")
+    (ws.drawings / "unused.0001.png").write_bytes(b"x")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    res = _call("opentoonz_clean", workspace="w", what="orphans", confirm=True)
+    assert not res.is_error
+    assert res.structured_content["cleaned"] == ["unused.0001.png"]
+    assert "1 orphaned drawings" in res.content[0].text

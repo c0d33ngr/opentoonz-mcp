@@ -207,10 +207,11 @@ def opentoonz_list_workspaces() -> ToolResult:
 def opentoonz_clean(workspace: str, what: str = "all", confirm: bool = False) -> ToolResult:
     """Delete a workspace's generated files to reclaim disk space.
 
-    what selects drawings, render, scripts, or all (the default). Only the
-    contents are removed — the workspace itself is kept, so it can be reused.
-    This is irreversible, so it refuses unless confirm=true; call it once without
-    confirm to see the refusal, then again with confirm=true to proceed.
+    what selects drawings, render, scripts, orphans (drawings no scene
+    references), or all (the default). Only the contents are removed — the
+    workspace itself is kept, so it can be reused. This is irreversible, so it
+    refuses unless confirm=true; call it once without confirm to see the refusal,
+    then again with confirm=true to proceed.
     """
     if not confirm:
         return _structured(
@@ -223,8 +224,12 @@ def opentoonz_clean(workspace: str, what: str = "all", confirm: bool = False) ->
     except OpentoonzMCPError as exc:
         return _structured(_fail(exc), error=True)
     size = workspace_mod.human_size(freed)
+    if what == "orphans":
+        summary = f"OK: removed {len(targets)} orphaned drawings in '{workspace}' ({size} freed)"
+    else:
+        summary = f"OK: cleaned {', '.join(targets)} in '{workspace}' ({size} freed)"
     return _structured(
-        f"OK: cleaned {', '.join(targets)} in '{workspace}' ({size} freed)",
+        summary,
         {"workspace": workspace, "cleaned": targets, "bytes_freed": freed, "size": size},
     )
 

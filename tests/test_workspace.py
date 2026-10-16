@@ -209,3 +209,28 @@ def test_delete_removes_the_whole_workspace(context):
 def test_delete_rejects_a_missing_workspace(context):
     with pytest.raises(WorkspaceError):
         W.delete(context, "ghost")
+
+
+def test_clean_orphans_removes_drawings_no_scene_uses(context):
+    ws, _ = W.create(context, "w")
+    used = ws.drawings / "used.0001.png"
+    used.write_bytes(b"x" * 40)
+    orphan = ws.drawings / "unused.0001.png"
+    orphan.write_bytes(b"x" * 60)
+    (ws.root / "main.tnz").write_text("<scene><level>used</level></scene>", encoding="utf-8")
+
+    targets, freed = W.clean(context, "w", "orphans")
+    assert targets == ["unused.0001.png"]
+    assert freed >= 60
+    assert used.is_file()  # still referenced by a scene
+    assert not orphan.exists()
+
+
+def test_clean_orphans_refuses_when_there_are_no_scenes(context):
+    """With nothing to compare against, every drawing would look orphaned."""
+    ws, _ = W.create(context, "w")
+    kept = ws.drawings / "a.0001.png"
+    kept.write_bytes(b"x")
+    with pytest.raises(WorkspaceError, match="no scenes"):
+        W.clean(context, "w", "orphans")
+    assert kept.is_file()

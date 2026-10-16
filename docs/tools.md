@@ -40,8 +40,14 @@ structured `workspaces` payload with the same fields.
 
 ### `opentoonz_clean(workspace, what="all", confirm=False) -> str`
 Deletes generated files to reclaim disk space. `what` is `drawings`, `render`,
-`scripts`, or `all` (the default); only the contents go, so the workspace and its
-subdirectories remain and can be reused.
+`scripts`, `orphans`, or `all` (the default); only the contents go, so the
+workspace and its subdirectories remain and can be reused.
+
+`what="orphans"` removes only drawings no scene in the workspace references — the
+level names are read from the `.tnz` files, and a name is kept if it appears
+anywhere in any scene, so the check errs towards keeping files. With no scenes at
+all there is nothing to compare against, so it refuses rather than treating every
+drawing as an orphan. The reply lists the files removed.
 
 This is **irreversible**, so it refuses unless `confirm=true`. The reply reports
 how much was freed. Use `opentoonz_list_workspaces` first to see what a workspace

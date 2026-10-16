@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`opentoonz_clean(what="orphans")`** — removes drawings that no scene in the
+  workspace references, which is what accumulates when a level is re-imported
+  under a new name or a sequence is drawn but never used. Conservative by design:
+  a name is kept if any scene mentions it, and with no scenes at all it refuses
+  rather than treating every drawing as an orphan.
 - **`opentoonz_doctor(smoke=true)`** — runs a trivial script through OpenToonz and
   reports whether it actually executed, so the diagnostic proves the runtime works
   end to end rather than only that the binaries exist.
