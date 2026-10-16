@@ -146,7 +146,7 @@ OPENTOONZ_RUNTIME=/path/to/squashfs-root python examples/camera_move.py   # ease
 | Tool | Purpose |
 |---|---|
 | `opentoonz_health` | Quick availability check |
-| `opentoonz_doctor` | Full diagnostics (paths, versions, state) |
+| `opentoonz_doctor` | Full diagnostics (paths, versions, state; `smoke=true` runs a real script) |
 | `opentoonz_create_workspace` | Create a workspace (idempotent) |
 | `opentoonz_list_workspaces` | Inventory workspaces/scenes/videos |
 | `opentoonz_clean` | Delete generated files to reclaim disk space (needs `confirm=true`) |

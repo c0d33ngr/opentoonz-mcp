@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`opentoonz_doctor(smoke=true)`** — runs a trivial script through OpenToonz and
+  reports whether it actually executed, so the diagnostic proves the runtime works
+  end to end rather than only that the binaries exist.
 - **`opentoonz_delete_workspace(workspace, confirm=)`** — removes a whole
   workspace, scenes and all. Irreversible, so it refuses unless `confirm=true`;
   `opentoonz_clean` remains the keep-the-workspace alternative.

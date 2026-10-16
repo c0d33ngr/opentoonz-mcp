@@ -18,8 +18,13 @@ block**, so looking at a frame needs no extra round-trip.
 Quick check that the runtime binaries and ffmpeg exist. Returns `READY ...` or
 `DEGRADED — missing: ...`.
 
-### `opentoonz_doctor() -> str`
+### `opentoonz_doctor(smoke=False) -> str`
 Full diagnostics: resolved paths, version, prepared state, timeouts.
+
+`smoke=true` additionally runs a trivial script through OpenToonz and reports the
+result (`smoke        : OK (1.2s)`). Resolved paths only prove the binaries exist;
+a script actually running and printing the success marker proves the runtime works
+end to end. That launches OpenToonz, so it costs a few seconds and is off by default.
 
 ## Workspaces
 

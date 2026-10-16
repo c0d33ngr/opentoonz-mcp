@@ -106,9 +106,32 @@ def opentoonz_health() -> str:
     )
 
 
+def _smoke(context) -> str:
+    """Run a trivial script through OpenToonz to prove it really executes.
+
+    Resolved paths only show that the binaries exist; a script actually running
+    and printing the success marker shows the runtime works end to end.
+    """
+    scratch = context.settings.data_home / "doctor-smoke"
+    scratch.mkdir(parents=True, exist_ok=True)
+    code = f'print("SMOKE");\nprint("{bridge.OK_MARKER}");\n'
+    try:
+        result = bridge.run_script(context, scratch, code)
+    except OpentoonzMCPError as exc:
+        return f"FAILED — {exc}"
+    if result.ok:
+        return f"OK ({result.duration:.1f}s)"
+    return f"FAILED — {result.failure}"
+
+
 @mcp.tool()
-def opentoonz_doctor() -> str:
-    """Full diagnostic: resolved paths, versions, and prepared state."""
+def opentoonz_doctor(smoke: bool = False) -> str:
+    """Full diagnostic: resolved paths, versions, and prepared state.
+
+    smoke=true also runs a trivial script through OpenToonz, which proves the
+    runtime actually executes — not merely that the binaries exist. That launches
+    OpenToonz, so it costs a few seconds and is off by default.
+    """
     try:
         ctx = get_context()
         ctx.prepare()
@@ -127,6 +150,8 @@ def opentoonz_doctor() -> str:
         f"ffmpeg       : {ffmpeg or 'NOT FOUND (' + ctx.settings.ffmpeg + ')'}",
         f"timeouts     : script={ctx.settings.script_timeout}s render={ctx.settings.render_timeout}s",
     ]
+    if smoke:
+        lines.append(f"smoke        : {_smoke(ctx)}")
     return "\n".join(lines)
 
 

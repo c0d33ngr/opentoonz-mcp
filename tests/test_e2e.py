@@ -541,3 +541,12 @@ def test_extract_frames_from_a_video(live_context, tmp_path):
 
     rendered = R.render_frames(ctx, "footage", "main", out_name="clip")
     assert len(rendered.frames) == 8
+
+
+def test_doctor_smoke_runs_a_real_script(live_context, monkeypatch):
+    """smoke=true proves the runtime executes, not just that binaries exist."""
+    from opentoonz_mcp import server
+
+    monkeypatch.setattr(server, "get_context", lambda: live_context)
+    out = server.opentoonz_doctor(smoke=True)
+    assert "smoke        : OK" in out

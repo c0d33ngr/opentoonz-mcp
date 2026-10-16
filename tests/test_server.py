@@ -250,3 +250,44 @@ def test_opentoonz_delete_workspace_removes_it(context, monkeypatch):
     res = _call("opentoonz_delete_workspace", workspace="w", confirm=True)
     assert not res.is_error
     assert not ws.root.exists()
+
+
+# -- doctor smoke (C3) ---------------------------------------------------------
+def _script_result(ok):
+    from opentoonz_mcp import bridge
+
+    return bridge.ScriptResult(
+        ok=ok,
+        stdout="__OTMCP_OK__" if ok else "",
+        stderr="",
+        exit_code=0,
+        timed_out=False,
+        duration=0.2,
+        script_path=Path("/tmp/smoke.toonzscript"),
+    )
+
+
+def test_smoke_reports_a_passing_script(context, monkeypatch):
+    from opentoonz_mcp import bridge, server
+
+    monkeypatch.setattr(bridge, "run_script", lambda *a, **k: _script_result(True))
+    assert server._smoke(context).startswith("OK")
+
+
+def test_smoke_reports_a_failing_script(context, monkeypatch):
+    from opentoonz_mcp import bridge, server
+
+    monkeypatch.setattr(bridge, "run_script", lambda *a, **k: _script_result(False))
+    assert server._smoke(context).startswith("FAILED")
+
+
+def test_doctor_only_smokes_when_asked(context, monkeypatch):
+    from opentoonz_mcp import server
+
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    monkeypatch.setattr(context, "prepare", lambda: None)
+    monkeypatch.setattr(server, "_which_ffmpeg", lambda ctx: "/usr/bin/ffmpeg")
+    assert "smoke        :" not in server.opentoonz_doctor()
+
+    monkeypatch.setattr(server, "_smoke", lambda ctx: "OK")
+    assert "smoke        : OK" in server.opentoonz_doctor(smoke=True)
