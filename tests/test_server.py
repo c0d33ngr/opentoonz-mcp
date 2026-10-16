@@ -118,6 +118,48 @@ def test_render_frame_returns_an_image_and_structured_data(context, monkeypatch,
     assert res.structured_content["output"].endswith("look_0001.png")
 
 
+def test_render_frame_defaults_to_a_downscaled_preview(context, monkeypatch, tmp_path):
+    """A full-size 1080p image on every look is expensive; the default is small."""
+    from opentoonz_mcp import render as render_mod
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    W.create(context, "w")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    png = tmp_path / "look_0001.png"
+    Image.new("RGBA", (1920, 1080), (0, 0, 0, 255)).save(png)
+    seen = {}
+
+    def fake(ctx, workspace, scene, frame=1, out_name="look", max_width=None):
+        seen["max_width"] = max_width
+        return render_mod.RenderResult(ok=True, frames=[png], log="", exit_code=0, timed_out=False, duration=0.1)
+
+    monkeypatch.setattr(render_mod, "render_frame", fake)
+    _call("opentoonz_render_frame", workspace="w", scene="main")
+    assert seen["max_width"] == server.DEFAULT_PREVIEW_WIDTH
+
+
+def test_render_frame_full_size_on_request(context, monkeypatch, tmp_path):
+    """max_width=0 opts out of the preview downscale."""
+    from opentoonz_mcp import render as render_mod
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    W.create(context, "w")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    png = tmp_path / "look_0001.png"
+    Image.new("RGBA", (1920, 1080), (0, 0, 0, 255)).save(png)
+    seen = {}
+
+    def fake(ctx, workspace, scene, frame=1, out_name="look", max_width=None):
+        seen["max_width"] = max_width
+        return render_mod.RenderResult(ok=True, frames=[png], log="", exit_code=0, timed_out=False, duration=0.1)
+
+    monkeypatch.setattr(render_mod, "render_frame", fake)
+    _call("opentoonz_render_frame", workspace="w", scene="main", max_width=0)
+    assert seen["max_width"] is None
+
+
 def test_render_returns_structured_content(context, monkeypatch, tmp_path):
     from opentoonz_mcp import render as render_mod
     from opentoonz_mcp import server
@@ -253,6 +295,182 @@ def test_opentoonz_delete_workspace_removes_it(context, monkeypatch):
     res = _call("opentoonz_delete_workspace", workspace="w", confirm=True)
     assert not res.is_error
     assert not ws.root.exists()
+
+
+# -- elicitation confirmation for destructive tools ----------------------------
+class _Elicitor:
+    """Stands in for fastmcp's Context, answering the confirmation prompt."""
+
+    def __init__(self, answer=None, error=None):
+        self.answer = answer
+        self.error = error
+        self.prompts = []
+
+    async def elicit(self, message, response_type=None, **kwargs):
+        self.prompts.append(message)
+        if self.error is not None:
+            raise self.error
+        return self.answer
+
+
+def test_clean_can_be_confirmed_by_elicitation(context, monkeypatch):
+    from fastmcp.server.elicitation import AcceptedElicitation
+
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    ws, _ = W.create(context, "w")
+    (ws.render / "clip.mp4").write_bytes(b"x")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    elicitor = _Elicitor(AcceptedElicitation(data=True))
+    res = asyncio.run(server.opentoonz_clean("w", ctx=elicitor))
+    assert not res.is_error
+    assert not (ws.render / "clip.mp4").exists()
+    assert elicitor.prompts  # a human was actually asked
+
+
+def test_clean_declined_by_the_user_refuses(context, monkeypatch):
+    from fastmcp.server.elicitation import DeclinedElicitation
+
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    ws, _ = W.create(context, "w")
+    (ws.render / "clip.mp4").write_bytes(b"x")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    res = asyncio.run(server.opentoonz_clean("w", ctx=_Elicitor(DeclinedElicitation())))
+    assert res.is_error
+    assert (ws.render / "clip.mp4").is_file()
+
+
+def test_clean_falls_back_to_confirm_when_elicitation_is_unsupported(context, monkeypatch):
+    """No way to ask a human: keep requiring the explicit flag, not assume consent."""
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    ws, _ = W.create(context, "w")
+    (ws.render / "clip.mp4").write_bytes(b"x")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    res = asyncio.run(server.opentoonz_clean("w", ctx=_Elicitor(error=RuntimeError("unsupported"))))
+    assert res.is_error and "confirm" in res.content[0].text
+    assert (ws.render / "clip.mp4").is_file()
+
+
+def test_clean_with_confirm_skips_the_prompt(context, monkeypatch):
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    ws, _ = W.create(context, "w")
+    (ws.render / "clip.mp4").write_bytes(b"x")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    elicitor = _Elicitor()
+    res = asyncio.run(server.opentoonz_clean("w", confirm=True, ctx=elicitor))
+    assert not res.is_error
+    assert elicitor.prompts == []
+
+
+def test_delete_workspace_can_be_confirmed_by_elicitation(context, monkeypatch):
+    from fastmcp.server.elicitation import AcceptedElicitation
+
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    ws, _ = W.create(context, "w")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    res = asyncio.run(server.opentoonz_delete_workspace("w", ctx=_Elicitor(AcceptedElicitation(data=True))))
+    assert not res.is_error
+    assert not ws.root.exists()
+
+
+def test_delete_workspace_declined_by_the_user_refuses(context, monkeypatch):
+    from fastmcp.server.elicitation import DeclinedElicitation
+
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    ws, _ = W.create(context, "w")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    res = asyncio.run(server.opentoonz_delete_workspace("w", ctx=_Elicitor(DeclinedElicitation())))
+    assert res.is_error
+    assert ws.root.is_dir()
+
+
+# -- level-name validation (path traversal) ------------------------------------
+#: A name that climbs out of the workspace's drawings/ folder.
+_TRAVERSAL = "../../esc"
+
+
+def _escaped(context):
+    """The file the traversal would create, if it were not rejected."""
+    return context.settings.workspaces_root / "esc.0001.png"
+
+
+def test_draw_frame_rejects_a_traversing_level_name(context, monkeypatch):
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    W.create(context, "w")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    res = _call(
+        "opentoonz_draw_frame",
+        workspace="w",
+        level_name=_TRAVERSAL,
+        ops=[{"op": "rect", "xy": [0, 0, 4, 4], "fill": "#ffffff"}],
+    )
+    assert "Invalid level name" in res.content[0].text
+    assert not _escaped(context).exists()
+
+
+def test_draw_frames_rejects_a_traversing_level_name(context, monkeypatch):
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    W.create(context, "w")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    res = _call(
+        "opentoonz_draw_frames",
+        workspace="w",
+        level_name=_TRAVERSAL,
+        frames=[[{"op": "rect", "xy": [0, 0, 4, 4], "fill": "#ffffff"}]],
+    )
+    assert "Invalid level name" in res.content[0].text
+    assert not _escaped(context).exists()
+
+
+def test_tween_frames_rejects_a_traversing_level_name(context, monkeypatch, tmp_path):
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    W.create(context, "w")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    sprite = tmp_path / "s.png"
+    Image.new("RGBA", (10, 10), (255, 0, 0, 255)).save(sprite)
+    res = _call(
+        "opentoonz_tween_frames",
+        workspace="w",
+        level_name=_TRAVERSAL,
+        start={"path": str(sprite)},
+        end={"path": str(sprite)},
+        frames=2,
+    )
+    assert "Invalid level name" in res.content[0].text
+    assert not _escaped(context).exists()
+
+
+def test_draw_frame_still_writes_a_plain_name(context, monkeypatch):
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    ws, _ = W.create(context, "w")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    res = _call(
+        "opentoonz_draw_frame",
+        workspace="w",
+        level_name="hero",
+        ops=[{"op": "rect", "xy": [0, 0, 4, 4], "fill": "#ffffff"}],
+    )
+    assert res.content[0].text.startswith("OK")
+    assert (ws.drawings / "hero.0001.png").is_file()
 
 
 # -- doctor smoke (C3) ---------------------------------------------------------

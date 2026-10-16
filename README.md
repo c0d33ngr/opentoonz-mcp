@@ -7,6 +7,7 @@
 It works by running OpenToonz's **built-in scripting engine** in CLI mode and the official **`tcomposer`** headless renderer, then exposing the useful primitives as MCP tools.
 
 [![CI](https://github.com/c0d33ngr/opentoonz-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/c0d33ngr/opentoonz-mcp/actions/workflows/ci.yml)
+[![e2e](https://github.com/c0d33ngr/opentoonz-mcp/actions/workflows/e2e.yml/badge.svg)](https://github.com/c0d33ngr/opentoonz-mcp/actions/workflows/e2e.yml)
 [![License: MIT](https://img.shields.io/github/license/c0d33ngr/opentoonz-mcp)](https://github.com/c0d33ngr/opentoonz-mcp/blob/main/LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://github.com/c0d33ngr/opentoonz-mcp)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
@@ -68,7 +69,7 @@ See **[docs/installation.md](docs/installation.md)** for how to obtain and point
 # from GitHub (no clone needed)
 pipx install git+https://github.com/c0d33ngr/opentoonz-mcp.git
 # or, pinned to a release
-pipx install "git+https://github.com/c0d33ngr/opentoonz-mcp.git@v0.7.0"
+pipx install "git+https://github.com/c0d33ngr/opentoonz-mcp.git@v0.8.0"
 # or, from a checkout
 pipx install .
 # or
@@ -228,6 +229,24 @@ python -m build          # packaging check
 The `e2e` suite needs a real OpenToonz runtime, so it is not part of the push/PR
 gate. To run it in CI on demand — or weekly — see
 **[`.github/workflows/e2e.yml`](.github/workflows/e2e.yml)**.
+
+### What the tests prove
+
+- **Unit tests** (`pytest -m "not e2e"`) run on every push and PR across Python
+  3.10–3.12. They cover the Python logic *and* the scene-file edits: the camera
+  channels, the easing markup and the scene-settings patch are asserted against
+  synthetic `.tnz` files trimmed from a real OpenToonz 1.8 scene, so a regression
+  in what gets written is caught without a runtime.
+- **End-to-end tests** (`pytest -m e2e`) drive a real OpenToonz runtime and are
+  what proves the *integration* — that OpenToonz accepts, renders and re-saves
+  what the tools write. They cannot run on the push/PR gate (OpenToonz publishes
+  its Linux AppImage only as a login-gated workflow artifact, and it is not
+  redistributed here), so they run from `e2e.yml` on demand and weekly, and
+  upload the rendered frames and video as artifacts so a result can be inspected
+  without a local runtime.
+- When the `e2e` job cannot find a runtime it **skips with a warning** rather
+  than failing, so check its badge/run before assuming the integration was
+  exercised. The integration contract is the part CI does not cover on its own.
 
 Architecture notes live in **[docs/architecture.md](docs/architecture.md)**.
 

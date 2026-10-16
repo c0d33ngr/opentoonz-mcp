@@ -56,18 +56,25 @@ jobs:
           INPUT_URL: ${{ inputs.appimage_url }}
           PINNED_URL: ${{ vars.OPENTOONZ_APPIMAGE_URL }}
         run: |
-          set -euo pipefail
+          # No `-e`: a failed fetch should skip the suite with a warning, not fail
+          # the job red (which would mask a real regression and be pure noise).
+          set -uo pipefail
           url="${INPUT_URL:-${PINNED_URL:-}}"
           if [ -n "$url" ]; then
             echo "Downloading the AppImage from the supplied URL."
-            curl -fsSL "$url" -o OpenToonz.AppImage
+            curl -fsSL "$url" -o OpenToonz.AppImage \
+              || echo "::warning title=AppImage download failed::curl could not fetch the URL."
           elif [ -n "${GH_TOKEN:-}" ]; then
             echo "Looking for the newest Linux Build artifact on opentoonz/opentoonz."
-            run_id=$(gh api \
+            if run_id=$(gh api \
               "repos/opentoonz/opentoonz/actions/workflows/workflow_linux.yml/runs?status=success&per_page=1" \
-              --jq '.workflow_runs[0].id')
-            gh run download "$run_id" --repo opentoonz/opentoonz --dir downloaded
-            find downloaded -name '*.AppImage' -print -exec mv {} OpenToonz.AppImage \;
+              --jq '.workflow_runs[0].id'); then
+              gh run download "$run_id" --repo opentoonz/opentoonz --dir downloaded \
+                && find downloaded -name '*.AppImage' -exec mv {} OpenToonz.AppImage \; \
+                || echo "::warning title=Artifact download failed::the token may lack read access to opentoonz/opentoonz."
+            else
+              echo "::warning title=Artifact lookup failed::gh could not list opentoonz/opentoonz runs (token or permissions?)."
+            fi
           fi
           if [ ! -f OpenToonz.AppImage ]; then
             echo "::warning title=No OpenToonz runtime::Skipping the e2e suite. Pass appimage_url, set the OPENTOONZ_APPIMAGE_URL variable, or the OPENTOONZ_ARTIFACT_TOKEN secret."
@@ -86,4 +93,18 @@ jobs:
         if: steps.appimage.outputs.available == 'true'
         env:
           OPENTOONZ_RUNTIME: ${{ github.workspace }}/runtime/squashfs-root
-        run: pytest -m e2e -v --timeout=300
+        # --basetemp keeps the renders under the workspace so they can be uploaded.
+        run: pytest -m e2e -v --timeout=300 --basetemp=e2e-out
+
+      - name: Upload rendered evidence
+        if: always() && steps.appimage.outputs.available == 'true'
+        # So the integration result is inspectable without a local runtime.
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-renders
+          path: |
+            e2e-out/**/render/*.png
+            e2e-out/**/render/*.mp4
+            e2e-out/**/render/*.gif
+          if-no-files-found: ignore
+          retention-days: 14

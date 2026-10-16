@@ -11,6 +11,7 @@ from typing import Any
 
 import anyio
 from fastmcp import Context, FastMCP
+from fastmcp.server.elicitation import AcceptedElicitation
 from fastmcp.tools import ToolResult
 from fastmcp.utilities.types import Image as ImageBlock
 from mcp.types import TextContent
@@ -44,6 +45,12 @@ def _fail(exc: Exception) -> str:
     return f"ERROR [{type(exc).__name__}]: {exc}"
 
 
+#: A preview wider than this is downscaled before being returned inline, so
+#: looking at a 1080p scene does not cost a full-size image on every call. The
+#: tool's max_width overrides it; max_width=0 asks for full resolution.
+DEFAULT_PREVIEW_WIDTH = 768
+
+
 async def _progress(ctx: Context | None, progress: float, total: float, message: str) -> None:
     """Report progress if a client attached a context.
 
@@ -53,6 +60,34 @@ async def _progress(ctx: Context | None, progress: float, total: float, message:
     """
     if ctx is not None:
         await ctx.report_progress(progress=progress, total=total, message=message)
+
+
+async def _confirmed(ctx: Context | None, confirm: bool, action: str, target: str) -> tuple[bool, str | None]:
+    """Gate a destructive operation behind a real confirmation.
+
+    ``confirm=True`` is the explicit, non-interactive path (automation and
+    tests). Otherwise, when the client can ask its user, elicit a yes/no — a
+    human check, which a flag the model fills in itself is not. If there is no
+    context, or the client cannot be asked, fail closed and keep requiring
+    ``confirm`` rather than assuming consent.
+    """
+    if confirm:
+        return True, None
+    refusal = (
+        f"Refusing to {action} '{target}': this cannot be undone. "
+        "Approve the confirmation prompt, or pass confirm=true to proceed."
+    )
+    if ctx is None:
+        return False, refusal
+    try:
+        answer = await ctx.elicit(f"{action.capitalize()} '{target}'? This cannot be undone.", response_type=bool)
+    except Exception:  # noqa: BLE001 - any failure to ask means we cannot ask
+        # No elicitation support (or the request failed): there is no way to ask a
+        # human, so fall back to the explicit flag.
+        return False, refusal
+    if isinstance(answer, AcceptedElicitation) and answer.data is True:
+        return True, None
+    return False, f"Not done: '{target}' was left untouched."
 
 
 def _workspace_report(ws) -> models.WorkspaceReport:
@@ -236,21 +271,22 @@ def opentoonz_list_workspaces() -> ToolResult:
 
 
 @mcp.tool()
-def opentoonz_clean(workspace: str, what: str = "all", confirm: bool = False) -> ToolResult:
+async def opentoonz_clean(
+    workspace: str, what: str = "all", confirm: bool = False, ctx: Context | None = None
+) -> ToolResult:
     """Delete a workspace's generated files to reclaim disk space.
 
     what selects drawings, render, scripts, orphans (drawings no scene
     references), or all (the default). Only the contents are removed — the
-    workspace itself is kept, so it can be reused. This is irreversible, so it
-    refuses unless confirm=true; call it once without confirm to see the refusal,
-    then again with confirm=true to proceed.
+    workspace itself is kept, so it can be reused.
+
+    This is irreversible. When the client supports it, the user is asked to
+    confirm through an elicitation prompt; otherwise pass confirm=true explicitly
+    (which is also how automation and tests proceed).
     """
-    if not confirm:
-        return _structured(
-            f"Refusing to clean '{workspace}': this deletes drawings/renders/scripts and cannot be undone. "
-            "Call again with confirm=true to proceed.",
-            error=True,
-        )
+    ok, refusal = await _confirmed(ctx, confirm, "clean", workspace)
+    if not ok:
+        return _structured(refusal, error=True)
     try:
         targets, freed = workspace_mod.clean(get_context(), workspace, what)
     except OpentoonzMCPError as exc:
@@ -267,19 +303,17 @@ def opentoonz_clean(workspace: str, what: str = "all", confirm: bool = False) ->
 
 
 @mcp.tool()
-def opentoonz_delete_workspace(workspace: str, confirm: bool = False) -> ToolResult:
+async def opentoonz_delete_workspace(workspace: str, confirm: bool = False, ctx: Context | None = None) -> ToolResult:
     """Delete a whole workspace, including its scenes and renders.
 
     This is the blunt instrument: opentoonz_clean empties a workspace but keeps it
-    usable, while this removes it entirely. Irreversible, so it refuses unless
-    confirm=true.
+    usable, while this removes it entirely. Irreversible: when the client supports
+    it, the user is asked to confirm through an elicitation prompt; otherwise pass
+    confirm=true explicitly.
     """
-    if not confirm:
-        return _structured(
-            f"Refusing to delete '{workspace}': this removes the whole workspace and cannot be undone. "
-            "Call again with confirm=true to proceed.",
-            error=True,
-        )
+    ok, refusal = await _confirmed(ctx, confirm, "delete", workspace)
+    if not ok:
+        return _structured(refusal, error=True)
     try:
         freed = workspace_mod.delete(get_context(), workspace)
     except OpentoonzMCPError as exc:
@@ -379,22 +413,36 @@ def opentoonz_extract_frames(
     start: float | None = None,
     end: float | None = None,
     max_width: int | None = None,
+    max_frames: int = render_mod.MAX_EXTRACT_FRAMES,
 ) -> str:
     """Extract a video's frames into drawings/<level_name>.%04d.png, as a level.
 
     How outside footage joins a scene: extract, then pass the returned paths to
     opentoonz_import_images_as_level. fps resamples (default keeps the source
     rate), start/end are seconds, and max_width downscales so a large source does
-    not fill the workspace. Previous drawings for the same level are cleared
-    first, so a shorter extract cannot leave orphaned frames.
+    not fill the workspace. max_frames caps the extraction (default 5000) so a
+    long clip cannot fill the disk; raise it, or use start/end/fps, for more.
+    Previous drawings for the same level are cleared first, so a shorter extract
+    cannot leave orphaned frames.
     """
     try:
         frames = render_mod.extract_frames(
-            get_context(), workspace, level_name, video, fps=fps, start=start, end=end, max_width=max_width
+            get_context(),
+            workspace,
+            level_name,
+            video,
+            fps=fps,
+            start=start,
+            end=end,
+            max_width=max_width,
+            max_frames=max_frames,
         )
     except OpentoonzMCPError as exc:
         return _fail(exc)
-    return f"OK: extracted {len(frames)} frames for level '{level_name}'\n" + "\n".join(str(path) for path in frames)
+    note = " (capped — raise max_frames or trim with start/end for more)" if len(frames) >= int(max_frames) else ""
+    return f"OK: extracted {len(frames)} frames for level '{level_name}'{note}\n" + "\n".join(
+        str(path) for path in frames
+    )
 
 
 @mcp.tool()
@@ -517,6 +565,7 @@ def opentoonz_draw_frame(
     opentoonz_import_images_as_level.
     """
     try:
+        scenes.validate_level_name(level_name)
         ws = workspace_mod.require(get_context(), workspace)
         path = ws.drawings / f"{level_name}.{int(frame):04d}.png"
         draw.draw_frame(path, ops, width=width, height=height, background=background)
@@ -540,6 +589,7 @@ def opentoonz_draw_frames(
     Saves <workspace>/drawings/<level_name>.%04d.png and returns the paths.
     """
     try:
+        scenes.validate_level_name(level_name)
         ws = workspace_mod.require(get_context(), workspace)
         paths = []
         for index, ops in enumerate(frames, start=1):
@@ -575,6 +625,7 @@ def opentoonz_tween_frames(
     leaves and arrives gently instead of at a constant speed.
     """
     try:
+        scenes.validate_level_name(level_name)
         ws = workspace_mod.require(get_context(), workspace)
         rendered = draw.tween(start, end, frames, width=width, height=height, background=background, ease=ease)
         paths = []
@@ -600,14 +651,16 @@ def opentoonz_render_frame(
     """Render a single frame to a PNG — the agent's 'look' at the result.
 
     The image is returned inline as well as on disk, so looking at a frame costs
-    no extra round-trip. max_width (optional) downscales it in place to that
-    width, so a large scene costs fewer image tokens. The scene's resolution is
-    unchanged, and opentoonz_render / opentoonz_render_video output is never
-    downscaled.
+    no extra round-trip. It is downscaled to 768px wide by default, so a large
+    scene costs far fewer image tokens; pass max_width to change that, or
+    max_width=0 for the full-resolution frame. Only the returned preview is
+    affected — the scene's resolution is unchanged, and opentoonz_render /
+    opentoonz_render_video output is never downscaled.
     """
+    preview = DEFAULT_PREVIEW_WIDTH if max_width is None else int(max_width)
     try:
         result = render_mod.render_frame(
-            get_context(), workspace, scene, frame=frame, out_name=out_name, max_width=max_width
+            get_context(), workspace, scene, frame=frame, out_name=out_name, max_width=(preview or None)
         )
     except OpentoonzMCPError as exc:
         return _structured(_fail(exc), error=True)

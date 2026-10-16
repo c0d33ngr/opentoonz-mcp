@@ -168,11 +168,25 @@ def test_render_video_applies_crf_and_scale(prepared, monkeypatch):
     assert cmd[cmd.index("-vf") + 1] == "scale=trunc(iw*0.5/2)*2:trunc(ih*0.5/2)*2"
 
 
-def test_render_video_without_crf_or_scale_stays_default(prepared, monkeypatch):
+def test_render_video_keeps_even_dimensions_when_scaled(prepared, monkeypatch):
     _scene(prepared)
-    calls = _fake(monkeypatch, {"tcomposer": _tcomposer((64, 36)), "ffmpeg": _writes_output()})
+    calls = _fake(monkeypatch, {"tcomposer": _tcomposer((65, 37)), "ffmpeg": _writes_output()})
+    render.render_video(prepared, "w", "main", scale=2)
+    assert calls[-1][calls[-1].index("-vf") + 1] == "scale=trunc(iw*2.0/2)*2:trunc(ih*2.0/2)*2"
+
+
+def test_render_video_forces_even_dimensions_without_scale(prepared, monkeypatch):
+    """libx264 + yuv420p rejects odd width/height, and a scene can be odd-sized.
+
+    The even-dimension filter used to be applied only when ``scale`` was given,
+    so an odd-sized scene failed at the encoder.
+    """
+    _scene(prepared)
+    calls = _fake(monkeypatch, {"tcomposer": _tcomposer((65, 37)), "ffmpeg": _writes_output()})
     render.render_video(prepared, "w", "main")
-    assert "-crf" not in calls[-1] and "-vf" not in calls[-1]
+    cmd = calls[-1]
+    assert "-crf" not in cmd
+    assert cmd[cmd.index("-vf") + 1] == "scale=trunc(iw/2)*2:trunc(ih/2)*2"
 
 
 @pytest.mark.parametrize("kwargs", [{"crf": -1}, {"crf": 52}, {"scale": 0}, {"scale": -1}])
@@ -230,6 +244,30 @@ def test_render_rejects_a_traversing_scene_name(prepared):
         render.render_frames(prepared, "w", "../evil")
 
 
+# -- output stems must not collide by prefix -----------------------------------
+def test_clear_stale_spares_a_similarly_named_render(prepared):
+    """``a_`` must not match ``a_b_0001.png``: a prefix is not this render's."""
+    ws = _scene(prepared)
+    keep = ws.render / "a_b_0001.png"
+    keep.write_bytes(b"keep")
+    stale = ws.render / "a_0001.png"
+    stale.write_bytes(b"stale")
+    render._clear_stale(ws.render, "a_")
+    assert not stale.exists()
+    assert keep.exists()
+
+
+def test_render_frames_does_not_collect_a_similarly_named_render(prepared, monkeypatch):
+    """The frame list is what the render reports — it must be exactly this stem."""
+    ws = _scene(prepared)
+    other = ws.render / "a_b_0001.png"
+    other.write_bytes(b"other")
+    _fake(monkeypatch, {"tcomposer": _tcomposer((64, 36))})
+    result = render.render_frames(prepared, "w", "main", out_name="a")
+    assert [p.name for p in result.frames] == ["a_0001.png"]
+    assert other.exists()
+
+
 # -- frame extraction (B5) -----------------------------------------------------
 def _extractor(count=3):
     """An ffmpeg stand-in that writes ``count`` numbered PNGs at the pattern."""
@@ -264,6 +302,33 @@ def test_extract_frames_builds_its_filters(prepared, monkeypatch, tmp_path):
     assert cmd[cmd.index("-ss") + 1] == "1.5"
     assert cmd[cmd.index("-to") + 1] == "4"
     assert cmd[cmd.index("-vf") + 1] == "fps=12,scale=320:-2"
+
+
+def test_extract_frames_caps_the_frame_count(prepared, monkeypatch, tmp_path):
+    """A long clip must not write unbounded PNGs; ffmpeg is told to stop."""
+    W.create(prepared, "w")
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"x")
+    calls = _fake(monkeypatch, {"ffmpeg": _extractor(2)})
+    render.extract_frames(prepared, "w", "shot", str(video))
+    assert calls[-1][calls[-1].index("-frames:v") + 1] == str(render.MAX_EXTRACT_FRAMES)
+
+
+def test_extract_frames_honours_an_explicit_cap(prepared, monkeypatch, tmp_path):
+    W.create(prepared, "w")
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"x")
+    calls = _fake(monkeypatch, {"ffmpeg": _extractor(2)})
+    render.extract_frames(prepared, "w", "shot", str(video), max_frames=100)
+    assert calls[-1][calls[-1].index("-frames:v") + 1] == "100"
+
+
+def test_extract_frames_rejects_a_bad_cap(prepared, monkeypatch, tmp_path):
+    W.create(prepared, "w")
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"x")
+    with pytest.raises(RenderError, match="max_frames"):
+        render.extract_frames(prepared, "w", "shot", str(video), max_frames=0)
 
 
 def test_extract_frames_clears_previous_drawings(prepared, monkeypatch, tmp_path):

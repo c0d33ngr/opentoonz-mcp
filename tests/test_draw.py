@@ -359,3 +359,36 @@ def test_effects_run_after_the_art_they_apply_to():
         [{"op": "blur", "radius": 3}, {"op": "rect", "xy": [10, 10, 30, 30], "fill": "#ffffff"}]
     )
     assert frame.image.getpixel((10, 20))[3] == 255  # the edge stayed hard
+
+
+# -- guardrails: an agent can ask for something absurd --------------------------
+def test_frame_rejects_an_oversized_side():
+    with pytest.raises(OpentoonzMCPError, match="too large"):
+        Frame(width=draw_mod.MAX_DIMENSION + 1, height=10)
+
+
+def test_frame_rejects_too_many_pixels():
+    with pytest.raises(OpentoonzMCPError, match="too large"):
+        Frame(width=draw_mod.MAX_DIMENSION, height=draw_mod.MAX_DIMENSION)
+
+
+def test_frame_allows_a_large_but_sane_canvas():
+    frame = Frame(width=2048, height=2048)
+    assert frame.image.size == (2048, 2048)
+
+
+def test_blur_rejects_an_absurd_radius():
+    with pytest.raises(OpentoonzMCPError, match="blur radius"):
+        Frame(8, 8).blur(radius=draw_mod.MAX_BLUR + 1)
+
+
+def test_glow_rejects_an_absurd_radius():
+    with pytest.raises(OpentoonzMCPError, match="glow radius"):
+        Frame(8, 8).glow(radius=draw_mod.MAX_BLUR + 1)
+
+
+def test_tween_rejects_an_absurd_frame_count(tmp_path):
+    sprite = tmp_path / "s.png"
+    Image.new("RGBA", (4, 4)).save(sprite)
+    with pytest.raises(OpentoonzMCPError, match="too many"):
+        draw_mod.tween({"path": str(sprite)}, {"path": str(sprite)}, draw_mod.MAX_TWEEN_FRAMES + 1)

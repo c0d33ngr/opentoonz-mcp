@@ -10,7 +10,8 @@ summary **plus** a machine-readable payload as structured content (see
 `models.py`), so a client can read `frames`, `levels`, `cells`, and so on without
 parsing the text.
 `opentoonz_render_frame` additionally returns the rendered PNG as an **image
-block**, so looking at a frame needs no extra round-trip.
+block** (downscaled to 768px wide by default — see below), so looking at a frame
+needs no extra round-trip.
 
 ## Diagnostics
 
@@ -49,15 +50,18 @@ anywhere in any scene, so the check errs towards keeping files. With no scenes a
 all there is nothing to compare against, so it refuses rather than treating every
 drawing as an orphan. The reply lists the files removed.
 
-This is **irreversible**, so it refuses unless `confirm=true`. The reply reports
-how much was freed. Use `opentoonz_list_workspaces` first to see what a workspace
-costs.
+This is **irreversible**. When the client supports MCP elicitation, the user is
+asked to confirm through a prompt; otherwise pass `confirm=true` explicitly (the
+non-interactive path, used by automation and tests). If there is no way to ask —
+no client context, or an unsupported client — it fails closed and keeps requiring
+`confirm`. The reply reports how much was freed. Use
+`opentoonz_list_workspaces` first to see what a workspace costs.
 
 ### `opentoonz_delete_workspace(workspace, confirm=False) -> str`
 Removes a whole workspace, scenes and all. This is the blunt instrument:
 `opentoonz_clean` empties a workspace but keeps it usable, while this deletes it.
-Irreversible, so it refuses unless `confirm=true`; the reply reports how much was
-freed.
+Irreversible: confirmed through an elicitation prompt when the client supports it,
+otherwise `confirm=true`; the reply reports how much was freed.
 
 ## Scenes
 
@@ -101,13 +105,16 @@ per row on the xsheet, starting at `start_row` in `column`.
 - Level names must be 1–64 characters of `A-Z a-z 0-9 _ -` (they become file
   prefixes).
 
-### `opentoonz_extract_frames(workspace, level_name, video, fps=None, start=None, end=None, max_width=None) -> str`
+### `opentoonz_extract_frames(workspace, level_name, video, fps=None, start=None, end=None, max_width=None, max_frames=5000) -> str`
 Extracts a video's frames into `drawings/<level_name>.%04d.png` with ffmpeg —
 the way outside footage joins a scene. Pass the returned paths straight to
 `opentoonz_import_images_as_level`.
 
 - `fps` resamples (default keeps the source rate), `start`/`end` are in seconds,
   and `max_width` downscales so a large source does not fill the workspace.
+- `max_frames` caps how many frames are written (default 5000), so a long clip
+  cannot fill the disk in one call; raise it, or trim with `start`/`end`/`fps`.
+  The reply says so when the cap is reached.
 - Frames are written as **RGBA PNG**, which OpenToonz requires at render time.
 - Previous drawings for the same level are cleared first, so a shorter extract
   cannot leave orphaned frames behind.
@@ -281,10 +288,11 @@ Renders a single frame to a PNG — the agent's "look" at its work. The image is
 returned **inline** as an image block as well as written to disk, so inspecting a
 frame costs no extra round-trip.
 
-`max_width` downscales the returned PNG **in place** so looking at a large scene
-costs fewer image tokens; the reply reports the size, e.g. `(960x540, downscaled
-from 1920x1080)`. Only this preview is affected — `opentoonz_render` and
-`opentoonz_render_video` frames are never downscaled.
+The returned preview is downscaled to **768px wide by default**, so looking at a
+1080p scene does not cost a full-size image on every call. Pass `max_width` to
+change that, or `max_width=0` for the full-resolution frame. The reply reports the
+size, e.g. `(960x540, downscaled from 1920x1080)`. Only this preview is affected —
+`opentoonz_render` and `opentoonz_render_video` frames are never downscaled.
 
 ### `opentoonz_render(workspace, scene, out_name="render", start=None, end=None) -> str`
 Renders the scene to `render/<out_name>_NNNN.png` with `tcomposer`. Any stale

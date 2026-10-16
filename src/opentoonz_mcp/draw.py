@@ -56,6 +56,21 @@ DEFAULT_WIDTH = 1920
 DEFAULT_HEIGHT = 1080
 DEFAULT_BACKGROUND = "#181a2e"
 
+#: Guardrails. A frame is an RGBA buffer held in memory and written to disk, and
+#: a tween writes one file per frame, so the extremes are capped rather than
+#: letting a single call exhaust memory or fill a disk.
+MAX_DIMENSION = 8192
+MAX_PIXELS = 40_000_000
+MAX_BLUR = 200
+MAX_TWEEN_FRAMES = 2000
+
+
+def _check_radius(radius: float, label: str) -> float:
+    if not 0 <= float(radius) <= MAX_BLUR:
+        raise OpentoonzMCPError(f"{label} radius must be between 0 and {MAX_BLUR}, got {radius!r}")
+    return float(radius)
+
+
 #: ``Frame.image`` is the PIL surface, so the ``image`` op needs a real name.
 _OP_ALIASES = {"image": "paste_image"}
 
@@ -173,6 +188,11 @@ class Frame:
     ) -> None:
         if width <= 0 or height <= 0:
             raise OpentoonzMCPError(f"Frame size must be positive, got {width}x{height}")
+        if width > MAX_DIMENSION or height > MAX_DIMENSION or width * height > MAX_PIXELS:
+            raise OpentoonzMCPError(
+                f"Frame size {width}x{height} is too large: at most {MAX_DIMENSION} per side "
+                f"and {MAX_PIXELS:,} pixels in total."
+            )
         self.width = int(width)
         self.height = int(height)
         fill = (0, 0, 0, 0) if background is None else parse_color(background)
@@ -354,16 +374,17 @@ class Frame:
     # -- baked effects ------------------------------------------------------
     def blur(self, radius: float = 4) -> Frame:
         """Gaussian-blur everything drawn so far."""
-        self._replace(self.image.filter(ImageFilter.GaussianBlur(float(radius))))
+        self._replace(self.image.filter(ImageFilter.GaussianBlur(_check_radius(radius, "blur"))))
         return self
 
     def glow(self, radius: float = 8, strength: float = 0.7, threshold: int = 140) -> Frame:
         """Bloom the bright areas: select them, blur them, and add them back."""
+        radius = _check_radius(radius, "glow")
         source = self.image
         bright = source.convert("L").point(lambda value: value if value >= int(threshold) else 0)
         selected = source.copy()
         selected.putalpha(ImageChops.multiply(source.getchannel("A"), bright))
-        bloom = selected.filter(ImageFilter.GaussianBlur(float(radius)))
+        bloom = selected.filter(ImageFilter.GaussianBlur(radius))
         if strength != 1.0:
             bloom.putalpha(bloom.getchannel("A").point(lambda value: int(value * float(strength))))
         self._replace(Image.alpha_composite(source, bloom))
@@ -575,6 +596,8 @@ def tween(
     """
     if count < 2:
         raise OpentoonzMCPError(f"a tween needs at least 2 frames, got {count!r}")
+    if count > MAX_TWEEN_FRAMES:
+        raise OpentoonzMCPError(f"a tween of {count} frames is too many (max {MAX_TWEEN_FRAMES}).")
     first = _placement(start, label="start")
     last = _placement(end, label="end")
     with Image.open(first["path"]) as opened:

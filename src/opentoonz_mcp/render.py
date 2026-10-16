@@ -21,8 +21,22 @@ from .context import Context
 from .errors import RenderError, WorkspaceError
 from .scenes import validate_level_name
 
-#: tcomposer writes ``<prefix>NNNN.png``.
-_FRAME_RE = re.compile(r"\d+\.png$")
+#: A single extract writes one RGBA PNG per frame, so a long clip could fill a
+#: disk in one call. ffmpeg is told to stop after this many frames; the tool
+#: says so when the cap is hit.
+MAX_EXTRACT_FRAMES = 5000
+
+
+def _frames_for(directory: Path, stem: str) -> list[Path]:
+    """The frames belonging to exactly this stem, sorted.
+
+    ``tcomposer`` writes ``<stem><n>.png``, so the digits follow the stem
+    immediately. A prefix match is not enough: ``a_`` would also match
+    ``a_b_0001.png``, so a render named ``a`` would count — and delete — a render
+    named ``a_b``. Batch renders naming scenes ``intro``/``intro_v2`` hit this.
+    """
+    pattern = re.compile(rf"^{re.escape(stem)}\d+\.png$")
+    return sorted(p for p in directory.glob(f"{stem}*.png") if pattern.match(p.name))
 
 
 @dataclass
@@ -56,9 +70,8 @@ def _clear_stale(directory: Path, stem: str) -> None:
     """Delete frames from a previous render so counts and videos stay honest."""
     if not directory.is_dir():
         return
-    for path in directory.glob(f"{stem}*.png"):
-        if _FRAME_RE.search(path.name):
-            path.unlink(missing_ok=True)
+    for path in _frames_for(directory, stem):
+        path.unlink(missing_ok=True)
 
 
 def _run_tcomposer(
@@ -112,7 +125,7 @@ def _run_tcomposer(
 
     duration = time.monotonic() - started
     stem = out_prefix.name[: -len(".png")] if out_prefix.name.endswith(".png") else out_prefix.name
-    frames = sorted(p for p in out_dir.glob(f"{stem}*.png") if _FRAME_RE.search(p.name))
+    frames = _frames_for(out_dir, stem)
     return RenderResult(
         ok=bool(frames) and not timed_out,
         frames=frames,
@@ -254,9 +267,13 @@ def render_video(
     cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p"]
     if crf is not None:
         cmd += ["-crf", str(int(crf))]
-    if scale is not None:
+    # Always keep both dimensions even: libx264 + yuv420p rejects odd ones, and a
+    # scene's camera can be odd-sized. When a scale factor is given it is applied
+    # first, so the even rounding lands on the scaled size.
+    if scale is None:
+        cmd += ["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2"]
+    else:
         factor = float(scale)
-        # trunc(.../2)*2 keeps both dimensions even, which yuv420p requires.
         cmd += ["-vf", f"scale=trunc(iw*{factor}/2)*2:trunc(ih*{factor}/2)*2"]
     cmd += [str(video)]
     _run_ffmpeg(context, cmd, video, "video")
@@ -325,6 +342,7 @@ def extract_frames(
     start: float | None = None,
     end: float | None = None,
     max_width: int | None = None,
+    max_frames: int = MAX_EXTRACT_FRAMES,
 ) -> list[Path]:
     """Extract a video's frames into ``drawings/`` as a level's drawings.
 
@@ -332,7 +350,8 @@ def extract_frames(
     ``opentoonz_import_images_as_level`` expects, so outside footage can join a
     scene as a level. ``fps`` resamples (default keeps the source rate),
     ``start``/``end`` are seconds, and ``max_width`` downscales so a large source
-    does not fill the workspace.
+    does not fill the workspace. ``max_frames`` caps how many frames are written,
+    so a long clip cannot fill the disk in one call.
     """
     ws = workspace_mod.require(context, workspace)
     validate_level_name(level_name)
@@ -343,6 +362,8 @@ def extract_frames(
         raise RenderError(f"fps must be greater than 0, got {fps!r}")
     if max_width is not None and int(max_width) <= 0:
         raise RenderError(f"max_width must be greater than 0, got {max_width!r}")
+    if int(max_frames) <= 0:
+        raise RenderError(f"max_frames must be greater than 0, got {max_frames!r}")
     if start is not None and float(start) < 0:
         raise RenderError(f"start must not be negative, got {start!r}")
     if end is not None and float(end) < 0:
@@ -372,6 +393,7 @@ def extract_frames(
     cmd += ["-i", str(source)]
     if filters:
         cmd += ["-vf", ",".join(filters)]
+    cmd += ["-frames:v", str(int(max_frames))]
     cmd += ["-pix_fmt", "rgba", pattern]
     _run_ffmpeg(context, cmd, None, "frames")
 
