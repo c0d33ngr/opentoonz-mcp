@@ -27,6 +27,7 @@ EXPECTED_TOOLS = {
     "opentoonz_render_video",
     "opentoonz_render_gif",
     "opentoonz_clean",
+    "opentoonz_delete_workspace",
     "opentoonz_run_script",
 }
 
@@ -226,3 +227,26 @@ def test_opentoonz_extract_frames_returns_the_paths(context, monkeypatch):
     out = server.opentoonz_extract_frames("w", "shot", "/tmp/clip.mp4")
     assert out.startswith("OK: extracted 2 frames")
     assert "shot.0002.png" in out
+
+
+def test_opentoonz_delete_workspace_refuses_without_confirmation(context, monkeypatch):
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    ws, _ = W.create(context, "w")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    res = _call("opentoonz_delete_workspace", workspace="w")
+    assert res.is_error and "confirm" in res.content[0].text
+    assert ws.root.is_dir()  # nothing was touched
+
+
+def test_opentoonz_delete_workspace_removes_it(context, monkeypatch):
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    ws, _ = W.create(context, "w")
+    (ws.render / "clip.mp4").write_bytes(b"x" * 20)
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    res = _call("opentoonz_delete_workspace", workspace="w", confirm=True)
+    assert not res.is_error
+    assert not ws.root.exists()

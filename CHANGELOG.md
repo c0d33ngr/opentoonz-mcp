@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`opentoonz_delete_workspace(workspace, confirm=)`** — removes a whole
+  workspace, scenes and all. Irreversible, so it refuses unless `confirm=true`;
+  `opentoonz_clean` remains the keep-the-workspace alternative.
+
 ## [0.6.0] - 2026-10-16
 
 ### Added

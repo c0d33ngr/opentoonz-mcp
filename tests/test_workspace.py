@@ -195,3 +195,17 @@ def test_lock_warns_once_when_fcntl_is_unavailable(context, monkeypatch):
         warnings.simplefilter("error")
         with W.lock(context, "w"):
             pass
+
+
+def test_delete_removes_the_whole_workspace(context):
+    ws, _ = W.create(context, "w")
+    (ws.render / "clip.mp4").write_bytes(b"x" * 100)
+    freed = W.delete(context, "w")
+    assert freed >= 100
+    assert not ws.root.exists()
+    assert W.list_workspaces(context) == []
+
+
+def test_delete_rejects_a_missing_workspace(context):
+    with pytest.raises(WorkspaceError):
+        W.delete(context, "ghost")

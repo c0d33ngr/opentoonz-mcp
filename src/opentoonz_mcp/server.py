@@ -204,6 +204,31 @@ def opentoonz_clean(workspace: str, what: str = "all", confirm: bool = False) ->
     )
 
 
+@mcp.tool()
+def opentoonz_delete_workspace(workspace: str, confirm: bool = False) -> ToolResult:
+    """Delete a whole workspace, including its scenes and renders.
+
+    This is the blunt instrument: opentoonz_clean empties a workspace but keeps it
+    usable, while this removes it entirely. Irreversible, so it refuses unless
+    confirm=true.
+    """
+    if not confirm:
+        return _structured(
+            f"Refusing to delete '{workspace}': this removes the whole workspace and cannot be undone. "
+            "Call again with confirm=true to proceed.",
+            error=True,
+        )
+    try:
+        freed = workspace_mod.delete(get_context(), workspace)
+    except OpentoonzMCPError as exc:
+        return _structured(_fail(exc), error=True)
+    size = workspace_mod.human_size(freed)
+    return _structured(
+        f"OK: deleted workspace '{workspace}' ({size} freed)",
+        {"workspace": workspace, "bytes_freed": freed, "size": size},
+    )
+
+
 # -- scenes -------------------------------------------------------------------
 @mcp.tool()
 def opentoonz_scene_new(

@@ -42,6 +42,12 @@ This is **irreversible**, so it refuses unless `confirm=true`. The reply reports
 how much was freed. Use `opentoonz_list_workspaces` first to see what a workspace
 costs.
 
+### `opentoonz_delete_workspace(workspace, confirm=False) -> str`
+Removes a whole workspace, scenes and all. This is the blunt instrument:
+`opentoonz_clean` empties a workspace but keeps it usable, while this deletes it.
+Irreversible, so it refuses unless `confirm=true`; the reply reports how much was
+freed.
+
 ## Scenes
 
 ### `opentoonz_scene_new(workspace: str, scene: str = "main", width=None, height=None, fps=None) -> str`

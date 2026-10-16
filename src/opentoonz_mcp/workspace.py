@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import functools
 import re
+import shutil
 import threading
 import time
 import warnings
@@ -292,3 +293,17 @@ def clean(context: Context, workspace: str, what: str = "all") -> tuple[list[str
         for path in sorted((p for p in directory.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
             path.rmdir()
     return targets, freed
+
+
+@locked
+def delete(context: Context, workspace: str) -> int:
+    """Remove a whole workspace and return the bytes it held.
+
+    This is the blunt instrument: ``clean`` empties a workspace but keeps it
+    usable, while ``delete`` removes it (scenes and all). The tool gates it
+    behind an explicit ``confirm``.
+    """
+    ws = require(context, workspace)
+    freed = disk_usage(ws)
+    shutil.rmtree(ws.root)
+    return freed
