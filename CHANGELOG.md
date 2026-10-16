@@ -6,6 +6,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-16
+
+### Added
+- **Confirmation prompts for destructive tools.** `opentoonz_clean` and
+  `opentoonz_delete_workspace` now ask the user through MCP elicitation when the
+  client supports it, instead of only accepting a `confirm=true` flag the model
+  fills in itself. `confirm=true` remains the explicit non-interactive path
+  (automation and tests); with no way to ask — no client context, or an
+  unsupported client — they fail closed.
+- **`opentoonz_extract_frames(max_frames=5000)`** caps how many frames a single
+  extract writes, so a long clip cannot fill the disk in one call. The reply says
+  so when the cap is reached; raise it, or trim with `start`/`end`/`fps`.
+- **Guardrails on drawing sizes.** A frame is capped at 8192 px per side and 40
+  million pixels, a `blur`/`glow` radius at 200, and a tween at 2000 frames, so an
+  absurd request fails with a clear message instead of exhausting memory or disk.
+- `docs/tools.md` and the README now state what the CI unit suite proves (the
+  scene-file edits, asserted against synthetic `.tnz` files) and what only the e2e
+  suite proves (the integration), and the e2e workflow uploads its renders as
+  artifacts.
+
+### Changed
+- **`opentoonz_render_frame` downscales the returned preview to 768px wide by
+  default**, so looking at a 1080p scene no longer costs a full-size image on
+  every call. Pass `max_width` to change it, or `max_width=0` for full size. Only
+  the inline preview is affected; on-disk renders are untouched.
+- The e2e workflow now **skips with a warning** when it cannot fetch a runtime,
+  rather than failing the job, so a weekly red always means a real regression.
+
+### Fixed
+- **Drawing level names are validated.** `opentoonz_draw_frame`,
+  `opentoonz_draw_frames` and `opentoonz_tween_frames` wrote
+  `<workspace>/drawings/<level_name>...` without validating `level_name`, so a
+  name like `../../esc` wrote outside the workspace. They now use the same
+  `validate_level_name` as import and extract.
+- **Render frames are matched by exact stem, not by prefix.** Frames were cleared
+  and collected with the glob `<stem>*.png`, so rendering `a` deleted — and
+  counted — the frames of `a_b`, and a batch naming scenes `intro`/`intro_v2` had
+  them clobber each other. The match is now anchored to the stem.
+- **MP4 output keeps both dimensions even without `scale`.** The even-dimension
+  filter was applied only when `scale` was given, so an odd-sized scene failed at
+  the encoder; it is now applied unconditionally.
+
 ## [0.7.0] - 2026-10-16
 
 ### Added
