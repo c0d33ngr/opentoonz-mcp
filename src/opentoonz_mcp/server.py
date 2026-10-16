@@ -8,7 +8,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from fastmcp import FastMCP
+import anyio
+from fastmcp import Context, FastMCP
 from fastmcp.tools import ToolResult
 from fastmcp.utilities.types import Image as ImageBlock
 from mcp.types import TextContent
@@ -40,6 +41,17 @@ mcp = FastMCP(
 
 def _fail(exc: Exception) -> str:
     return f"ERROR [{type(exc).__name__}]: {exc}"
+
+
+async def _progress(ctx: Context | None, progress: float, total: float, message: str) -> None:
+    """Report progress if a client attached a context.
+
+    ``ctx`` is injected by fastmcp and is optional, so a direct call (in a test,
+    or from another tool) simply skips reporting. Long renders report a start and
+    a finish; the batch tool reports once per scene.
+    """
+    if ctx is not None:
+        await ctx.report_progress(progress=progress, total=total, message=message)
 
 
 def _structured(
@@ -615,12 +627,13 @@ def opentoonz_render_frame(
 
 
 @mcp.tool()
-def opentoonz_render(
+async def opentoonz_render(
     workspace: str,
     scene: str,
     out_name: str = "render",
     start: int | None = None,
     end: int | None = None,
+    ctx: Context | None = None,
 ) -> ToolResult:
     """Render a scene to PNG frames under <workspace>/render/ with tcomposer.
 
@@ -632,13 +645,19 @@ def opentoonz_render(
         message = _fail(OpentoonzMCPError("start and end must be given together, as an inclusive frame range."))
         return _structured(message, error=True)
     frame_range = None if start is None else (int(start), int(end))
+    span = f" (frames {start}-{end})" if frame_range else ""
+    await _progress(ctx, 0, 1, f"rendering {scene}{span}")
     try:
-        result = render_mod.render_frames(get_context(), workspace, scene, out_name=out_name, frame_range=frame_range)
+        result = await anyio.to_thread.run_sync(
+            lambda: render_mod.render_frames(
+                get_context(), workspace, scene, out_name=out_name, frame_range=frame_range
+            )
+        )
     except OpentoonzMCPError as exc:
         return _structured(_fail(exc), error=True)
     if not result.frames:
         return _structured(f"FAILED (exit={result.exit_code}, {result.duration:.1f}s)\n{result.log}", error=True)
-    span = f" (frames {start}-{end})" if frame_range else ""
+    await _progress(ctx, 1, 1, "done")
     report = models.RenderReport(
         output=str(result.frames[0].parent), frames=len(result.frames), duration=result.duration
     )
@@ -648,7 +667,7 @@ def opentoonz_render(
 
 
 @mcp.tool()
-def opentoonz_render_video(
+async def opentoonz_render_video(
     workspace: str,
     scene: str,
     fps: int = 24,
@@ -656,6 +675,7 @@ def opentoonz_render_video(
     audio: str | None = None,
     crf: int | None = None,
     scale: float | None = None,
+    ctx: Context | None = None,
 ) -> ToolResult:
     """Render a scene and mux the frames into an MP4 with ffmpeg.
 
@@ -665,25 +685,30 @@ def opentoonz_render_video(
     crf (0-51, lower is better) trades quality for file size, and scale (a
     positive factor, e.g. 0.5) resizes the video.
     """
+    await _progress(ctx, 0, 1, f"rendering and encoding {scene}")
     try:
-        video, result = render_mod.render_video(
-            get_context(), workspace, scene, fps=fps, out_name=out_name, audio=audio, crf=crf, scale=scale
+        video, result = await anyio.to_thread.run_sync(
+            lambda: render_mod.render_video(
+                get_context(), workspace, scene, fps=fps, out_name=out_name, audio=audio, crf=crf, scale=scale
+            )
         )
     except OpentoonzMCPError as exc:
         return _structured(_fail(exc), error=True)
+    await _progress(ctx, 1, 1, "done")
     track = f" + audio {Path(audio).name}" if audio else ""
     report = models.RenderReport(output=str(video), frames=len(result.frames), duration=result.duration, fps=int(fps))
     return _structured(f"OK: {len(result.frames)} frames @ {fps}fps{track} -> {video}", report)
 
 
 @mcp.tool()
-def opentoonz_render_gif(
+async def opentoonz_render_gif(
     workspace: str,
     scene: str,
     fps: int = 12,
     out_name: str = "reel",
     max_width: int | None = None,
     colors: int = 256,
+    ctx: Context | None = None,
 ) -> ToolResult:
     """Render a scene to a looping GIF — the shareable form of a short move.
 
@@ -692,12 +717,16 @@ def opentoonz_render_gif(
     same tcomposer pass as opentoonz_render_video; use that for anything with
     audio or that must stay full resolution.
     """
+    await _progress(ctx, 0, 1, f"rendering and encoding {scene}")
     try:
-        gif, result = render_mod.render_gif(
-            get_context(), workspace, scene, fps=fps, out_name=out_name, max_width=max_width, colors=colors
+        gif, result = await anyio.to_thread.run_sync(
+            lambda: render_mod.render_gif(
+                get_context(), workspace, scene, fps=fps, out_name=out_name, max_width=max_width, colors=colors
+            )
         )
     except OpentoonzMCPError as exc:
         return _structured(_fail(exc), error=True)
+    await _progress(ctx, 1, 1, "done")
     size = workspace_mod.human_size(gif.stat().st_size)
     width, height = (int(part) for part in _png_size(gif).split("x"))
     report = models.RenderReport(
@@ -712,7 +741,7 @@ def opentoonz_render_gif(
 
 
 @mcp.tool()
-def opentoonz_render_batch(
+async def opentoonz_render_batch(
     workspace: str,
     scenes: list[str] | None = None,
     kind: str = "video",
@@ -722,6 +751,7 @@ def opentoonz_render_batch(
     end: int | None = None,
     crf: int | None = None,
     scale: float | None = None,
+    ctx: Context | None = None,
 ) -> ToolResult:
     """Render several scenes in one call, reporting each scene's own result.
 
@@ -734,9 +764,9 @@ def opentoonz_render_batch(
     batch is never lost to a single bad scene. The reply lists each scene as OK or
     FAILED, and the structured payload carries the same per-scene detail.
     """
-    ctx = get_context()
+    app = get_context()
     try:
-        ws = workspace_mod.require(ctx, workspace)
+        ws = workspace_mod.require(app, workspace)
         if kind not in ("frames", "video", "gif"):
             raise RenderError(f"kind must be 'frames', 'video' or 'gif', got {kind!r}")
         if (start is None) != (end is None):
@@ -754,30 +784,39 @@ def opentoonz_render_batch(
             raise RenderError(f"no such scene(s) in '{workspace}': {', '.join(missing)}")
         if out_name is not None and len(chosen) > 1:
             raise RenderError("out_name is ambiguous for several scenes; omit it to name each output after its scene")
-
-        items: list[models.BatchItem] = []
-        for name in chosen:
-            label = out_name or name
-            try:
-                if kind == "frames":
-                    result = render_mod.render_frames(
-                        ctx, workspace, name, out_name=label, frame_range=(start, end) if start is not None else None
-                    )
-                    output = str(result.frames[0].parent) if result.frames else None
-                elif kind == "video":
-                    path, result = render_mod.render_video(
-                        ctx, workspace, name, fps=fps, out_name=label, crf=crf, scale=scale
-                    )
-                    output = str(path)
-                else:
-                    path, result = render_mod.render_gif(ctx, workspace, name, fps=fps, out_name=label)
-                    output = str(path)
-            except OpentoonzMCPError as exc:
-                items.append(models.BatchItem(scene=name, ok=False, error=str(exc)))
-            else:
-                items.append(models.BatchItem(scene=name, ok=True, frames=len(result.frames), output=output))
     except OpentoonzMCPError as exc:
         return _structured(_fail(exc), error=True)
+
+    items: list[models.BatchItem] = []
+    for index, name in enumerate(chosen):
+        label = out_name or name
+        await _progress(ctx, index, len(chosen), f"rendering {name}")
+        try:
+            if kind == "frames":
+                frame_range = (start, end) if start is not None else None
+                result = await anyio.to_thread.run_sync(
+                    lambda name=name, label=label, frame_range=frame_range: render_mod.render_frames(
+                        app, workspace, name, out_name=label, frame_range=frame_range
+                    )
+                )
+                output = str(result.frames[0].parent) if result.frames else None
+            elif kind == "video":
+                path, result = await anyio.to_thread.run_sync(
+                    lambda name=name, label=label: render_mod.render_video(
+                        app, workspace, name, fps=fps, out_name=label, crf=crf, scale=scale
+                    )
+                )
+                output = str(path)
+            else:
+                path, result = await anyio.to_thread.run_sync(
+                    lambda name=name, label=label: render_mod.render_gif(app, workspace, name, fps=fps, out_name=label)
+                )
+                output = str(path)
+        except OpentoonzMCPError as exc:
+            items.append(models.BatchItem(scene=name, ok=False, error=str(exc)))
+        else:
+            items.append(models.BatchItem(scene=name, ok=True, frames=len(result.frames), output=output))
+    await _progress(ctx, len(chosen), len(chosen), "done")
 
     report = models.BatchReport(
         workspace=workspace,

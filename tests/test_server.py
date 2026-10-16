@@ -75,7 +75,7 @@ def test_opentoonz_render_forwards_a_frame_range(context, monkeypatch):
         )
 
     monkeypatch.setattr(render_mod, "render_frames", fake_render)
-    res = server.opentoonz_render("w", "main", start=1, end=3)
+    res = asyncio.run(server.opentoonz_render("w", "main", start=1, end=3))
     assert seen["frame_range"] == (1, 3)
     assert res.content[0].text.startswith("OK")
 
@@ -84,7 +84,7 @@ def test_opentoonz_render_needs_both_range_bounds(context, monkeypatch):
     from opentoonz_mcp import server
 
     monkeypatch.setattr(server, "get_context", lambda: context)
-    res = server.opentoonz_render("w", "main", start=1)
+    res = asyncio.run(server.opentoonz_render("w", "main", start=1))
     assert res.is_error and "end" in res.content[0].text
 
 
@@ -397,3 +397,71 @@ def test_opentoonz_render_batch_validates(context, monkeypatch, kwargs, message)
     _two_scenes(context, monkeypatch)
     res = _call("opentoonz_render_batch", workspace="w", **kwargs)
     assert res.is_error and message in res.content[0].text
+
+
+# -- progress reporting (C5) ---------------------------------------------------
+class _ProgressRecorder:
+    """Stands in for fastmcp's Context, which is injected at call time."""
+
+    def __init__(self):
+        self.calls = []
+
+    async def report_progress(self, progress, total=None, message=None):
+        self.calls.append((progress, total, message))
+
+
+def test_opentoonz_render_reports_progress(context, monkeypatch):
+    from opentoonz_mcp import render as render_mod
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    ws, _ = W.create(context, "w")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    monkeypatch.setattr(render_mod, "render_frames", lambda *a, **k: _render_result(ws.render / "render_0001.png"))
+    recorder = _ProgressRecorder()
+    asyncio.run(server.opentoonz_render("w", "main", ctx=recorder))
+    assert recorder.calls
+    assert recorder.calls[0][0] == 0
+    assert recorder.calls[-1][0] == recorder.calls[-1][1]  # finishes at 100%
+
+
+def test_opentoonz_render_runs_without_a_context(context, monkeypatch):
+    from opentoonz_mcp import render as render_mod
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    ws, _ = W.create(context, "w")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    monkeypatch.setattr(render_mod, "render_frames", lambda *a, **k: _render_result(ws.render / "render_0001.png"))
+    result = asyncio.run(server.opentoonz_render("w", "main"))  # no ctx at all
+    assert not result.is_error
+
+
+def test_opentoonz_render_video_reports_progress(context, monkeypatch):
+    from opentoonz_mcp import render as render_mod
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    ws, _ = W.create(context, "w")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    video = ws.render / "video.mp4"
+    monkeypatch.setattr(render_mod, "render_video", lambda *a, **k: (video, _render_result(video)))
+    recorder = _ProgressRecorder()
+    asyncio.run(server.opentoonz_render_video("w", "main", ctx=recorder))
+    assert recorder.calls[-1][0] == recorder.calls[-1][1]
+
+
+def test_opentoonz_render_batch_reports_per_scene_progress(context, monkeypatch):
+    from opentoonz_mcp import render as render_mod
+    from opentoonz_mcp import server
+
+    ws = _two_scenes(context, monkeypatch)
+
+    def fake_video(ctx, workspace, scene, fps=24, out_name="video", **kwargs):
+        return ws.render / f"{out_name}.mp4", _render_result(ws.render / f"{out_name}.mp4")
+
+    monkeypatch.setattr(render_mod, "render_video", fake_video)
+    recorder = _ProgressRecorder()
+    asyncio.run(server.opentoonz_render_batch("w", ctx=recorder))
+    assert [call[0] for call in recorder.calls] == [0, 1, 2]
+    assert all(call[1] == 2 for call in recorder.calls)

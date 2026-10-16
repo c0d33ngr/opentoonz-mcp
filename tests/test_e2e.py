@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 
 import pytest
@@ -565,8 +566,29 @@ def test_render_batch_renders_every_scene(live_context, monkeypatch):
         scenes.import_level(ctx, "batch", name, _draw_ball(ws, name=name, n=2, size=(160, 90)), name)
 
     monkeypatch.setattr(server, "get_context", lambda: ctx)
-    result = server.opentoonz_render_batch("batch", kind="video", fps=8)
+    result = asyncio.run(server.opentoonz_render_batch("batch", kind="video", fps=8))
     assert result.structured_content["rendered"] == 2
     assert result.structured_content["failed"] == 0
     for item in result.structured_content["items"]:
         assert Path(item["output"]).is_file()
+
+
+def test_render_video_reports_progress_end_to_end(live_context, monkeypatch):
+    """Progress must reach a client through a real render, not just a fake."""
+    from opentoonz_mcp import server
+
+    ctx = live_context
+    _camera_scene(ctx, "progress")
+
+    class Recorder:
+        def __init__(self):
+            self.calls = []
+
+        async def report_progress(self, progress, total=None, message=None):
+            self.calls.append((progress, total))
+
+    recorder = Recorder()
+    monkeypatch.setattr(server, "get_context", lambda: ctx)
+    asyncio.run(server.opentoonz_render_video("progress", "main", fps=8, ctx=recorder))
+    assert recorder.calls[0] == (0, 1)
+    assert recorder.calls[-1] == (1, 1)

@@ -270,6 +270,12 @@ Example:
 
 ## Rendering
 
+The long-running render tools (`opentoonz_render`, `opentoonz_render_video`,
+`opentoonz_render_gif`, `opentoonz_render_batch`) report **progress** to the
+client when it asks for it: they run the blocking render off the event loop and
+emit a start/finish update (the batch tool reports once per scene). A client that
+does not request progress simply does not see it.
+
 ### `opentoonz_render_frame(workspace, scene, frame=1, out_name="look", max_width=None) -> str`
 Renders a single frame to a PNG — the agent's "look" at its work. The image is
 returned **inline** as an image block as well as written to disk, so inspecting a

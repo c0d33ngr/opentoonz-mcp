@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Progress reporting during renders.** `opentoonz_render`, `opentoonz_render_video`,
+  `opentoonz_render_gif` and `opentoonz_render_batch` now report progress to the
+  client (start/finish, or once per scene for a batch) and run the blocking render
+  off the event loop, so a long render no longer freezes the server's responsiveness.
 - **`opentoonz_render_batch`** — renders several scenes in one call (frames, video
   or gif), naming each output after its scene and reporting every scene's result.
   One scene failing does not stop the rest, so a long batch is never lost to a
