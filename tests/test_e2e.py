@@ -406,3 +406,68 @@ def test_render_video_muxes_an_external_track(live_context, tmp_path):
         text=True,
     )
     assert probed.stdout.strip() == "aac"
+
+
+# -- ranges, directory import, encoding, cleaning ------------------------------
+def test_render_frame_range_renders_only_that_section(live_context):
+    ctx = live_context
+    ws, _ = W.create(ctx, "range")
+    scenes.import_level(ctx, "range", "ball", _draw_ball(ws, n=5), "main")
+    full = R.render_frames(ctx, "range", "main", out_name="seq")
+    assert len(full.frames) == 5
+    section = R.render_frames(ctx, "range", "main", out_name="seq", frame_range=(1, 3))
+    assert len(section.frames) == 3
+    assert [p.name for p in section.frames] == ["seq_0001.png", "seq_0002.png", "seq_0003.png"]
+
+
+def test_import_level_accepts_a_directory(live_context, tmp_path):
+    """A directory is the usual shape an exported sequence arrives in."""
+    ctx = live_context
+    W.create(ctx, "dirimport")
+    seq = tmp_path / "frames"
+    seq.mkdir()
+    for i in range(1, 4):
+        Image.new("RGBA", (64, 64), (i * 60, 0, 0, 255)).save(seq / f"shot_{i}.png")
+    imported = scenes.import_level(ctx, "dirimport", "shot", [str(seq)], "main")
+    assert imported.result.ok, imported.result.summary()
+    assert [p.name for p in imported.copied] == ["shot.0001.png", "shot.0002.png", "shot.0003.png"]
+
+
+def test_render_video_crf_and_scale_reach_ffmpeg(live_context):
+    """scale resizes the delivered MP4 (even dimensions kept for yuv420p)."""
+    ctx = live_context
+    _camera_scene(ctx, "encode")
+    video, rendered = R.render_video(ctx, "encode", "main", fps=8, out_name="clip", crf=30, scale=0.5)
+    assert video.is_file() and rendered.frames
+    probed = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=p=0",
+            str(video),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert probed.stdout.strip() == "320,180"
+
+
+def test_clean_reclaims_workspace_space(live_context):
+    ctx = live_context
+    ws, _ = W.create(ctx, "tidy")
+    scenes.import_level(ctx, "tidy", "ball", _draw_ball(ws), "main")
+    R.render_frames(ctx, "tidy", "main", out_name="seq")
+    before = W.disk_usage(ws)
+    assert before > 0
+
+    targets, freed = W.clean(ctx, "tidy", "all")
+    assert sorted(targets) == ["drawings", "render", "scripts"]
+    assert 0 < freed <= before
+    assert W.disk_usage(ws) < before
+    assert ws.root.is_dir()  # the workspace itself is kept

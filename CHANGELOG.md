@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-16
+
 ### Added
 - **`opentoonz_clean(workspace, what=, confirm=)`** — deletes a workspace's
   drawings, renders, or scripts to reclaim disk space, reporting how much was

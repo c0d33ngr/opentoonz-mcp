@@ -68,7 +68,7 @@ See **[docs/installation.md](docs/installation.md)** for how to obtain and point
 # from GitHub (no clone needed)
 pipx install git+https://github.com/c0d33ngr/opentoonz-mcp.git
 # or, pinned to a release
-pipx install "git+https://github.com/c0d33ngr/opentoonz-mcp.git@v0.4.0"
+pipx install "git+https://github.com/c0d33ngr/opentoonz-mcp.git@v0.5.0"
 # or, from a checkout
 pipx install .
 # or

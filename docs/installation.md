@@ -9,7 +9,7 @@ for you and never bundles it.
 ```bash
 pipx install git+https://github.com/c0d33ngr/opentoonz-mcp.git   # from GitHub
 # or, pinned to a release
-pipx install "git+https://github.com/c0d33ngr/opentoonz-mcp.git@v0.4.0"
+pipx install "git+https://github.com/c0d33ngr/opentoonz-mcp.git@v0.5.0"
 # or, from a checkout
 pipx install .
 # or
@@ -72,7 +72,7 @@ Start your MCP client and call `opentoonz_doctor`. It prints every resolved path
 the version, and the prepared state:
 
 ```
-opentoonz-mcp 0.4.0
+opentoonz-mcp 0.5.0
 runtime root : /home/me/.local/share/opentoonz-mcp/runtime/squashfs-root
 OpenToonz    : .../usr/bin/OpenToonz
 tcomposer    : .../usr/bin/tcomposer
