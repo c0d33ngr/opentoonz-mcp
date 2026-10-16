@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Baked effect ops** — `blur`, `glow`, `adjust`, `vignette`, `outline` and
+  `grain`. They post-process everything drawn before them, in order. OpenToonz FX
+  nodes are GUI-only, so effects are baked into the frame instead.
 - **`opentoonz_tween_frames`** — renders in-between frames moving one drawing from
   a start pose to an end pose (position, scale, rotation, opacity), with optional
   smoothstep easing, and saves them ready to import as a level. OpenToonz's

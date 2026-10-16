@@ -18,12 +18,22 @@ dicts ("ops"), which is what the MCP tool accepts:
     {"op": "bezier",  "points": [[x, y], ... 4 control points], "fill": "#...", "width": 3}
     {"op": "curve",   "points": [[x, y], ...], "fill": "#...", "width": 3}
     {"op": "gradient","xy": [x0, y0, x1, y1], "colors": ["#101828", "#4cd964"], "direction": "vertical"}
+    {"op": "blur",    "radius": 4}
+    {"op": "glow",    "radius": 8, "strength": 0.7, "threshold": 140}
+    {"op": "adjust",  "brightness": 1.2, "contrast": 1.1, "saturation": 0.8}
+    {"op": "vignette","strength": 0.6, "radius": 0.75}
+    {"op": "outline", "color": "#ffffff", "width": 4}
+    {"op": "grain",   "amount": 0.08}
     {"op": "text",    "xy": [x, y], "text": "Hi", "fill": "#fff", "size": 64, "anchor": "la"}
     {"op": "image",   "path": "/abs/art.png", "xy": [x, y], "size": [w, h], "opacity": 0.5}
 
 The ``image`` op composites an existing RGBA PNG (optionally resized), which is
 how art made elsewhere joins a drawn frame. ``curve`` is a Catmull-Rom spline
 through every point; ``bezier`` is a single cubic through exactly four.
+
+The ``blur``/``glow``/``adjust``/``vignette``/``outline``/``grain`` ops are baked
+effects: they post-process everything drawn **before** them, in order. OpenToonz
+FX nodes are GUI-only, so this is how effects are applied.
 
 Colours accept ``#rgb``, ``#rrggbb``, ``#rrggbbaa``, or ``[r, g, b(, a)]``.
 """
@@ -36,7 +46,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 from .errors import OpentoonzMCPError
 
@@ -64,6 +74,12 @@ _OP_SCHEMA: dict[str, frozenset[str]] = {
     "bezier": frozenset({"points", "steps", "fill", "width"}),
     "curve": frozenset({"points", "steps", "fill", "width"}),
     "gradient": frozenset({"xy", "colors", "direction"}),
+    "blur": frozenset({"radius"}),
+    "glow": frozenset({"radius", "strength", "threshold"}),
+    "adjust": frozenset({"brightness", "contrast", "saturation"}),
+    "vignette": frozenset({"strength", "radius"}),
+    "outline": frozenset({"color", "width"}),
+    "grain": frozenset({"amount"}),
     "text": frozenset({"xy", "text", "fill", "size", "anchor"}),
     "paste_image": frozenset({"path", "xy", "size", "opacity"}),
 }
@@ -161,6 +177,11 @@ class Frame:
         self.height = int(height)
         fill = (0, 0, 0, 0) if background is None else parse_color(background)
         self.image = Image.new("RGBA", (self.width, self.height), fill)
+        self.draw = ImageDraw.Draw(self.image)
+
+    def _replace(self, image: Image.Image) -> None:
+        """Swap in a new pixel buffer and rebind the draw surface to it."""
+        self.image = image
         self.draw = ImageDraw.Draw(self.image)
 
     # -- primitives ---------------------------------------------------------
@@ -328,6 +349,80 @@ class Frame:
                 self.draw.line([(x0 + i, y0), (x0 + i, y1)], fill=colour)
             else:
                 self.draw.line([(x0, y0 + i), (x1, y0 + i)], fill=colour)
+        return self
+
+    # -- baked effects ------------------------------------------------------
+    def blur(self, radius: float = 4) -> Frame:
+        """Gaussian-blur everything drawn so far."""
+        self._replace(self.image.filter(ImageFilter.GaussianBlur(float(radius))))
+        return self
+
+    def glow(self, radius: float = 8, strength: float = 0.7, threshold: int = 140) -> Frame:
+        """Bloom the bright areas: select them, blur them, and add them back."""
+        source = self.image
+        bright = source.convert("L").point(lambda value: value if value >= int(threshold) else 0)
+        selected = source.copy()
+        selected.putalpha(ImageChops.multiply(source.getchannel("A"), bright))
+        bloom = selected.filter(ImageFilter.GaussianBlur(float(radius)))
+        if strength != 1.0:
+            bloom.putalpha(bloom.getchannel("A").point(lambda value: int(value * float(strength))))
+        self._replace(Image.alpha_composite(source, bloom))
+        return self
+
+    def adjust(self, brightness: float = 1.0, contrast: float = 1.0, saturation: float = 1.0) -> Frame:
+        """Grade the frame: 1.0 leaves a channel alone, 2.0 doubles it."""
+        image = self.image
+        if brightness != 1.0:
+            image = ImageEnhance.Brightness(image).enhance(float(brightness))
+        if contrast != 1.0:
+            image = ImageEnhance.Contrast(image).enhance(float(contrast))
+        if saturation != 1.0:
+            image = ImageEnhance.Color(image).enhance(float(saturation))
+        self._replace(image)
+        return self
+
+    def vignette(self, strength: float = 0.6, radius: float = 0.75) -> Frame:
+        """Darken the frame towards its edges (``radius`` is the clear centre)."""
+        width, height = self.image.size
+        size = 256  # a small radial ramp, scaled up — cheap and smooth enough
+        ramp = Image.new("L", (size, size), 0)
+        pixels = ramp.load()
+        centre = (size - 1) / 2
+        inner = centre * float(radius)
+        outer = math.hypot(centre, centre)
+        for y in range(size):
+            for x in range(size):
+                distance = math.hypot(x - centre, y - centre)
+                if distance <= inner:
+                    pixels[x, y] = 0
+                elif distance >= outer:
+                    pixels[x, y] = 255
+                else:
+                    pixels[x, y] = int(255 * (distance - inner) / (outer - inner))
+        mask = ramp.resize((width, height), Image.BILINEAR).point(lambda value: int(value * float(strength)))
+        shade = Image.new("RGBA", (width, height), (0, 0, 0, 255))
+        shade.putalpha(mask)
+        self._replace(Image.alpha_composite(self.image, shade))
+        return self
+
+    def outline(self, color: Any = "#ffffff", width: int = 4) -> Frame:
+        """Stroke the silhouette of everything drawn so far."""
+        thickness = max(1, int(width))
+        alpha = self.image.getchannel("A")
+        grown = alpha.filter(ImageFilter.MaxFilter(thickness * 2 + 1))
+        stroke = Image.new("RGBA", self.image.size, parse_color(color))
+        stroke.putalpha(ImageChops.subtract(grown, alpha))
+        # Behind the art, so the stroke reads as an outline rather than a wash.
+        self._replace(Image.alpha_composite(stroke, self.image))
+        return self
+
+    def grain(self, amount: float = 0.08) -> Frame:
+        """Add film grain — a little noise over the frame."""
+        noise = Image.effect_noise(self.image.size, 128).convert("L")
+        speckle = noise.point(lambda value: int(abs(value - 128) * 2 * float(amount)))
+        layer = Image.new("RGBA", self.image.size, (255, 255, 255, 255))
+        layer.putalpha(speckle)
+        self._replace(Image.alpha_composite(self.image, layer))
         return self
 
     def text(self, xy: Sequence[float], text: str, fill: Any = "#ffffff", size: int = 64, anchor: str = "la") -> Frame:

@@ -303,3 +303,59 @@ def test_tween_needs_at_least_two_frames(tmp_path):
 def test_tween_rejects_a_missing_image(tmp_path):
     with pytest.raises(OpentoonzMCPError, match="Image not found"):
         draw_mod.tween({"path": str(tmp_path / "nope.png")}, {"path": str(tmp_path / "nope.png")}, 3)
+
+
+# -- baked effects (B3) --------------------------------------------------------
+def test_blur_op_softens_edges():
+    frame = Frame(41, 41, background=None).apply(
+        [{"op": "rect", "xy": [10, 10, 30, 30], "fill": "#ffffff"}, {"op": "blur", "radius": 3}]
+    )
+    # the hard edge bled outwards, so a pixel just outside is now partly opaque
+    assert 0 < frame.image.getpixel((8, 20))[3] < 255
+
+
+def test_adjust_op_brightens():
+    frame = Frame(8, 8, background=None).apply(
+        [{"op": "rect", "xy": [0, 0, 7, 7], "fill": "#404040"}, {"op": "adjust", "brightness": 2.0}]
+    )
+    assert frame.image.getpixel((4, 4))[0] > 0x40
+
+
+def test_vignette_op_darkens_the_edges():
+    frame = Frame(41, 41, background=None).apply(
+        [{"op": "rect", "xy": [0, 0, 40, 40], "fill": "#ffffff"}, {"op": "vignette", "strength": 0.8}]
+    )
+    assert frame.image.getpixel((0, 0))[0] < frame.image.getpixel((20, 20))[0]
+
+
+def test_outline_op_strokes_the_silhouette():
+    frame = Frame(41, 41, background=None).apply(
+        [{"op": "rect", "xy": [12, 12, 28, 28], "fill": "#ff0000"}, {"op": "outline", "color": "#ffffff", "width": 3}]
+    )
+    assert frame.image.getpixel((9, 20))[:3] == (255, 255, 255)  # the ring
+    assert frame.image.getpixel((20, 20))[:3] == (255, 0, 0)  # the fill is untouched
+
+
+def test_grain_op_adds_noise():
+    ops = [{"op": "rect", "xy": [0, 0, 40, 40], "fill": "#808080"}]
+    plain = Frame(41, 41, background=None).apply(ops)
+    grainy = Frame(41, 41, background=None).apply([*ops, {"op": "grain", "amount": 0.5}])
+    assert grainy.image.getpixel((20, 20)) != plain.image.getpixel((20, 20))
+
+
+def test_glow_op_blooms_around_a_bright_shape():
+    frame = Frame(41, 41, background=None).apply(
+        [
+            {"op": "rect", "xy": [15, 15, 25, 25], "fill": "#ffffff"},
+            {"op": "glow", "radius": 4, "strength": 0.9, "threshold": 120},
+        ]
+    )
+    assert frame.image.getpixel((10, 20))[3] > 0
+
+
+def test_effects_run_after_the_art_they_apply_to():
+    """An op list is ordered: a blur before the art does nothing to it."""
+    frame = Frame(41, 41, background=None).apply(
+        [{"op": "blur", "radius": 3}, {"op": "rect", "xy": [10, 10, 30, 30], "fill": "#ffffff"}]
+    )
+    assert frame.image.getpixel((10, 20))[3] == 255  # the edge stayed hard

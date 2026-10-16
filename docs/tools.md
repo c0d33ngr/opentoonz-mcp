@@ -198,8 +198,19 @@ An op is a dict with an `op` key and keyword arguments:
 | `bezier` | `points` (**4** control points), `steps`, `fill`, `width` |
 | `curve` | `points` (any number), `steps`, `fill`, `width` — a smooth spline *through* the points |
 | `gradient` | `xy=[x0,y0,x1,y1]`, `colors` (2+), `direction` (`vertical`/`horizontal`) |
+| `blur` | `radius` |
+| `glow` | `radius`, `strength` (0..1), `threshold` (0..255) |
+| `adjust` | `brightness`, `contrast`, `saturation` (1.0 = unchanged) |
+| `vignette` | `strength` (0..1), `radius` (clear-centre fraction) |
+| `outline` | `color`, `width` |
+| `grain` | `amount` |
 | `text` | `xy=[x,y]`, `text`, `fill`, `size`, `anchor` (PIL anchor, e.g. `"la"`) |
 | `image` | `path`, `xy=[x,y]`, `size=[w,h]` (optional resize), `opacity` (0..1) |
+
+The last six are **baked effects**: they post-process everything drawn before
+them, in order, so `[{"op": "rect", ...}, {"op": "blur", "radius": 6}]` blurs the
+rectangle. OpenToonz FX nodes are GUI-only (see
+[api-surface.md](api-surface.md)), so this is how effects are applied.
 
 Colours accept `#rgb`, `#rrggbb`, `#rrggbbaa`, or `[r, g, b(, a)]`.
 
