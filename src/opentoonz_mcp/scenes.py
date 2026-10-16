@@ -236,7 +236,6 @@ def scene_new(
     """
     ws = workspace_mod.require(context, workspace)
     scene_path = ws.scene_path(scene)
-    scene_path.parent.mkdir(parents=True, exist_ok=True)
     code = "var scene = new Scene();\nscene.save(" + _js(scene_path) + ");\n" + f'print("{OK_MARKER}");\n'
     bridge.run_script_or_raise(context, ws.root, code)
     if width is None and height is None and fps is None:

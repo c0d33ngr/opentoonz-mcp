@@ -35,6 +35,12 @@ def test_frame_is_rgba_and_sized(tmp_path):
         assert img.mode == "RGBA"
 
 
+def test_save_does_not_create_missing_directories(tmp_path):
+    """Saving must not mkdir an unvalidated path — the workspace owns the layout."""
+    with pytest.raises(FileNotFoundError):
+        draw_frame(tmp_path / "missing" / "a.png", [{"op": "rect", "xy": [0, 0, 1, 1]}])
+
+
 def test_ops_produce_visible_content(tmp_path):
     ops = [
         {"op": "rect", "xy": [0, 0, 64, 64], "fill": "#101010"},

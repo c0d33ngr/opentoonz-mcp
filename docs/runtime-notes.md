@@ -136,6 +136,10 @@ and the official [ToonzScript reference](https://opentoonz.readthedocs.io/en/lat
     midpoint (`smoothstep(0.5) = 0.5`), so a midpoint sample cannot tell them
     apart.
 
+Facts 16–26 are collected into the callable / absent tables in
+**[api-surface.md](api-surface.md)**, which also records the features those gaps
+descoped (B6 cell deletion, B7 vector levels).
+
 `scripts/probe_api.py` re-runs the scripting-API survey against an installed
 runtime, and `scripts/probe_camera.py` re-establishes the camera facts above
 (including that easing renders, and survives a save), so a version bump can be

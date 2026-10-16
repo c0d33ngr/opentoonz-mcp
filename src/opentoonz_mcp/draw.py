@@ -200,9 +200,13 @@ class Frame:
         return self
 
     def save(self, path: str | Path) -> Path:
-        """Save the frame as an RGBA PNG and return its path."""
+        """Save the frame as an RGBA PNG and return its path.
+
+        The parent directory is the caller's responsibility: the workspace owns
+        its layout, and creating parents here would let an unvalidated path
+        mkdir anywhere.
+        """
         path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
         self.image.save(path, format="PNG")
         return path
 

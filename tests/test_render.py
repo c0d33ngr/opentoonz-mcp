@@ -172,3 +172,18 @@ def test_render_gif_validates_its_inputs(prepared, kwargs, message):
     _scene(prepared)
     with pytest.raises(RenderError, match=message):
         render.render_gif(prepared, "w", "main", **kwargs)
+
+
+@pytest.mark.parametrize("out_name", ["../evil", "a/b", "..", "/abs", "a" * 65])
+def test_render_rejects_a_traversing_out_name(prepared, monkeypatch, out_name):
+    """The stem becomes file names and an ffmpeg glob — it must stay a plain name."""
+    _scene(prepared)
+    _fake(monkeypatch, {"tcomposer": _tcomposer((64, 36))})
+    with pytest.raises(RenderError, match="output name"):
+        render.render_frames(prepared, "w", "main", out_name=out_name)
+
+
+def test_render_rejects_a_traversing_scene_name(prepared):
+    _scene(prepared)
+    with pytest.raises(W.WorkspaceError, match="scene name"):
+        render.render_frames(prepared, "w", "../evil")

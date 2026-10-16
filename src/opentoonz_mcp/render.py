@@ -18,7 +18,7 @@ from PIL import Image
 from . import bridge
 from . import workspace as workspace_mod
 from .context import Context
-from .errors import RenderError
+from .errors import RenderError, WorkspaceError
 
 #: tcomposer writes ``<prefix>NNNN.png``.
 _FRAME_RE = re.compile(r"\d+\.png$")
@@ -37,7 +37,18 @@ class RenderResult:
 
 
 def _stem(out_name: str, default: str) -> str:
-    return (out_name.strip().rstrip("_") or default) + "_"
+    """Validate an output stem and append the frame-number separator.
+
+    ``'render'`` becomes ``'render_'``, so ``tcomposer`` writes
+    ``render_0001.png``. The name is validated here because it also forms the
+    ffmpeg glob used to clear and collect frames — an unvalidated stem could
+    reach outside the render directory.
+    """
+    name = (out_name or "").strip().rstrip("_") or default
+    try:
+        return workspace_mod.safe_out_name(name) + "_"
+    except WorkspaceError as exc:
+        raise RenderError(str(exc)) from exc
 
 
 def _clear_stale(directory: Path, stem: str) -> None:
@@ -203,7 +214,8 @@ def render_video(
     from outside; it is encoded as AAC and trimmed to the video (``-shortest``).
     """
     ws = workspace_mod.require(context, workspace)
-    base = out_name.strip().rstrip("_") or "video"
+    stem = _stem(out_name, "video")
+    base = stem.rstrip("_")
     track: Path | None = None
     if audio is not None:
         # Validate before rendering: a missing track should not cost a render.
@@ -214,7 +226,7 @@ def render_video(
     if not result.frames:
         raise RenderError(f"tcomposer produced no frames (exit={result.exit_code}).\n{result.log}")
     video = ws.render / f"{base}.mp4"
-    pattern = str(ws.render / f"{_stem(base, 'video')}%04d.png")
+    pattern = str(ws.render / f"{stem}%04d.png")
     cmd = [
         context.settings.ffmpeg,
         "-y",
@@ -249,7 +261,8 @@ def render_gif(
     do not band the way a fixed web palette would.
     """
     ws = workspace_mod.require(context, workspace)
-    base = out_name.strip().rstrip("_") or "reel"
+    stem = _stem(out_name, "reel")
+    base = stem.rstrip("_")
     if not 2 <= int(colors) <= 256:
         raise RenderError(f"colors must be between 2 and 256, got {colors!r}")
     if int(fps) < 1:
@@ -260,7 +273,7 @@ def render_gif(
     if not result.frames:
         raise RenderError(f"tcomposer produced no frames (exit={result.exit_code}).\n{result.log}")
     gif = ws.render / f"{base}.gif"
-    pattern = str(ws.render / f"{_stem(base, 'reel')}%04d.png")
+    pattern = str(ws.render / f"{stem}%04d.png")
     scale = "" if max_width is None else f"scale={int(max_width)}:-1:flags=lanczos,"
     chain = f"{scale}split[s0][s1];[s0]palettegen=max_colors={int(colors)}[p];[s1][p]paletteuse=dither=sierra2_4a"
     cmd = [

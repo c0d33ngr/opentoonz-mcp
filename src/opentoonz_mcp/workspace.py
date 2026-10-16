@@ -12,6 +12,7 @@ operation therefore runs under a per-workspace lock (:func:`lock`).
 from __future__ import annotations
 
 import functools
+import re
 import threading
 import time
 import warnings
@@ -28,6 +29,46 @@ except ImportError:  # pragma: no cover - Windows
     fcntl = None  # type: ignore[assignment]
 
 SUBDIRS = ("drawings", "render", "scripts")
+
+#: A name that may become a file inside a workspace: one plain path segment.
+_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_MAX_NAME = 64
+
+
+def _invalid(label: str, value: str) -> WorkspaceError:
+    return WorkspaceError(
+        f"Invalid {label} {value!r}: use 1-{_MAX_NAME} characters from A-Z a-z 0-9 _ - . "
+        "(a single name — no path separators and no '..')."
+    )
+
+
+def safe_scene_name(scene: str) -> str:
+    """Validate a scene name and return it with a ``.tnz`` extension.
+
+    Scenes live directly under the workspace root, so a scene name is a single
+    path segment. Anything that could escape the workspace — an absolute path, a
+    separator, or ``..`` — is rejected rather than quietly resolved.
+    """
+    name = (scene or "").strip()
+    if name.endswith(".tnz"):
+        name = name[: -len(".tnz")]
+    if not name or len(name) > _MAX_NAME or not _SAFE_NAME_RE.match(name) or ".." in name:
+        raise _invalid("scene name", scene)
+    return name + ".tnz"
+
+
+def safe_out_name(out_name: str) -> str:
+    """Validate a render output stem: a single plain name, no path, no ``..``.
+
+    The stem becomes part of output file names *and* an ffmpeg glob
+    (``<stem>*.png``), so an unvalidated one could write to — or delete files in —
+    a directory outside the render folder.
+    """
+    name = (out_name or "").strip().rstrip("_")
+    if not name or len(name) > _MAX_NAME or not _SAFE_NAME_RE.match(name) or ".." in name:
+        raise _invalid("output name", out_name)
+    return name
+
 
 #: How long to wait for a busy workspace before giving up.
 LOCK_TIMEOUT = 120.0
@@ -77,12 +118,12 @@ class Workspace:
         return self.root / "scripts"
 
     def scene_path(self, scene: str) -> Path:
-        """Resolve a scene name to a path (scenes live at the workspace root)."""
-        path = Path(scene)
-        name = scene if scene.endswith(".tnz") else scene + ".tnz"
-        if path.is_absolute():
-            return Path(name)
-        return (self.root / name).resolve()
+        """Resolve a *validated* scene name to a path inside the workspace.
+
+        Raises :class:`WorkspaceError` for a name that is not a plain segment, so
+        a caller cannot read or write a scene outside its own workspace.
+        """
+        return self.root / safe_scene_name(scene)
 
     def scenes(self) -> list[Path]:
         return sorted(self.root.glob("*.tnz"))

@@ -1,7 +1,6 @@
 import threading
 import time
 import warnings
-from pathlib import Path
 
 import pytest
 
@@ -44,7 +43,35 @@ def test_scene_path(context):
     ws, _ = W.create(context, "demo")
     assert ws.scene_path("main") == ws.root / "main.tnz"
     assert ws.scene_path("main.tnz") == ws.root / "main.tnz"
-    assert ws.scene_path(str(Path("/abs/x.tnz"))) == Path("/abs/x.tnz")
+
+
+@pytest.mark.parametrize("scene", ["/abs/x", "/abs/x.tnz", "../evil", "a/b", "..", "", "  ", ".tnz", "a" * 65])
+def test_scene_path_rejects_escaping_names(context, scene):
+    """A scene is a single segment under the workspace — never a path out of it."""
+    ws, _ = W.create(context, "demo")
+    with pytest.raises(WorkspaceError):
+        ws.scene_path(scene)
+
+
+@pytest.mark.parametrize("name", ["render", "look_01", "a.b", "R2-D2", "x"])
+def test_safe_out_name_accepts_plain_names(name):
+    assert W.safe_out_name(name) == name
+
+
+def test_safe_out_name_trims_a_trailing_separator():
+    assert W.safe_out_name("render_") == "render"
+
+
+@pytest.mark.parametrize("name", ["", "  ", "../evil", "a/b", "a\\b", "..", "x..y", "/abs", "a" * 65])
+def test_safe_out_name_rejects_traversal(name):
+    with pytest.raises(WorkspaceError):
+        W.safe_out_name(name)
+
+
+@pytest.mark.parametrize("scene", ["main", "shot_2", "a.b", "x" * 64])
+def test_safe_scene_name_adds_the_extension(scene):
+    assert W.safe_scene_name(scene) == scene + ".tnz"
+    assert W.safe_scene_name(scene + ".tnz") == scene + ".tnz"
 
 
 # -- locking ------------------------------------------------------------------
