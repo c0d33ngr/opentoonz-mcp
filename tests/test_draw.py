@@ -59,6 +59,60 @@ def test_unknown_op_raises():
         frame.apply([{"op": "does_not_exist"}])
 
 
+def test_round_rect_op_rounds_its_corners():
+    frame = Frame(40, 40, background=None).apply(
+        [{"op": "round_rect", "xy": [0, 0, 39, 39], "radius": 12, "fill": "#ffffff"}]
+    )
+    assert frame.image.getpixel((20, 20))[3] == 255  # the middle is filled
+    assert frame.image.getpixel((0, 0))[3] == 0  # the corner is rounded away
+
+
+def test_star_op_fills_a_five_point_star():
+    frame = Frame(41, 41, background=None).apply(
+        [{"op": "star", "box": [0, 0, 40, 40], "points": 5, "inner": 0.45, "fill": "#ffffff"}]
+    )
+    assert frame.image.getpixel((20, 20))[3] == 255  # the body is filled
+    assert frame.image.getpixel((0, 0))[3] == 0  # the box corner is outside the star
+
+
+def test_arc_op_pieslice_fills_a_wedge():
+    frame = Frame(41, 41, background=None).apply(
+        [{"op": "arc", "box": [0, 0, 40, 40], "start": 0, "end": 180, "style": "pieslice", "fill": "#ffffff"}]
+    )
+    # PIL angles run clockwise from 3 o'clock, so 0..180 is the lower half.
+    assert frame.image.getpixel((20, 35))[3] == 255
+    assert frame.image.getpixel((20, 5))[3] == 0
+
+
+def test_bezier_op_draws_a_curve():
+    frame = Frame(41, 41, background=None).apply(
+        [{"op": "bezier", "points": [[0, 40], [10, 0], [30, 0], [40, 40]], "fill": "#ffffff", "width": 3}]
+    )
+    assert frame.image.getchannel("A").getbbox() is not None
+
+
+def test_curve_op_passes_through_its_points():
+    frame = Frame(41, 41, background=None).apply(
+        [{"op": "curve", "points": [[0, 20], [20, 0], [40, 20]], "fill": "#ffffff", "width": 3}]
+    )
+    assert frame.image.getchannel("A").getbbox() is not None
+    assert frame.image.getpixel((0, 20))[3] == 255  # starts on its first point
+    assert frame.image.getpixel((40, 20))[3] == 255  # ends on its last
+
+
+def test_gradient_op_runs_top_to_bottom():
+    frame = Frame(41, 41, background=None).apply(
+        [{"op": "gradient", "xy": [0, 0, 40, 40], "colors": ["#000000", "#ffffff"], "direction": "vertical"}]
+    )
+    assert frame.image.getpixel((20, 0))[0] < 40
+    assert frame.image.getpixel((20, 40))[0] > 215
+
+
+def test_gradient_op_needs_at_least_two_colours():
+    with pytest.raises(OpentoonzMCPError):
+        Frame(8, 8, background=None).apply([{"op": "gradient", "xy": [0, 0, 8, 8], "colors": ["#000000"]}])
+
+
 def test_op_must_be_a_dict():
     with pytest.raises(OpentoonzMCPError):
         Frame(8, 8, background=None).apply(["rect"])

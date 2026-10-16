@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Six more drawing ops** — `round_rect`, `star`, `arc`, `bezier`, `curve` and
+  `gradient`. Frames can now carry rounded panels, stars, wedges, smooth splines
+  (`curve` passes through every point; `bezier` is a cubic) and linear gradients
+  without a separate image editor.
+
 ## [0.5.0] - 2026-10-16
 
 ### Added

@@ -170,10 +170,16 @@ An op is a dict with an `op` key and keyword arguments:
 | Op | Keys |
 |---|---|
 | `rect` | `xy=[x0,y0,x1,y1]`, `fill`, `outline`, `width` |
+| `round_rect` | `xy=[x0,y0,x1,y1]`, `radius`, `fill`, `outline`, `width` |
 | `ellipse` | `box=[x0,y0,x1,y1]`, `fill`, `outline`, `width` |
 | `line` | `xy=[x0,y0,x1,y1]`, `fill`, `width` |
 | `polygon` | `points=[[x,y],...]`, `fill`, `outline`, `width` |
 | `polyline` | `points=[[x,y],...]`, `fill`, `width` |
+| `star` | `box=[x0,y0,x1,y1]`, `points`, `inner` (0..1), `rotation`, `fill`, `outline`, `width` |
+| `arc` | `box=[x0,y0,x1,y1]`, `start`/`end` (degrees, clockwise from 3 o'clock), `style` (`pieslice`/`chord`/`arc`), `fill`, `outline`, `width` |
+| `bezier` | `points` (**4** control points), `steps`, `fill`, `width` |
+| `curve` | `points` (any number), `steps`, `fill`, `width` — a smooth spline *through* the points |
+| `gradient` | `xy=[x0,y0,x1,y1]`, `colors` (2+), `direction` (`vertical`/`horizontal`) |
 | `text` | `xy=[x,y]`, `text`, `fill`, `size`, `anchor` (PIL anchor, e.g. `"la"`) |
 | `image` | `path`, `xy=[x,y]`, `size=[w,h]` (optional resize), `opacity` (0..1) |
 
