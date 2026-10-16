@@ -19,7 +19,7 @@ from . import __version__, bootstrap, bridge, draw, models, scenes
 from . import render as render_mod
 from . import workspace as workspace_mod
 from .context import get_context
-from .errors import OpentoonzMCPError
+from .errors import OpentoonzMCPError, RenderError
 
 mcp = FastMCP(
     "opentoonz-mcp",
@@ -709,6 +709,90 @@ def opentoonz_render_gif(
         fps=int(fps),
     )
     return _structured(f"OK: {len(result.frames)} frames @ {fps}fps -> {gif} ({width}x{height}, {size})", report)
+
+
+@mcp.tool()
+def opentoonz_render_batch(
+    workspace: str,
+    scenes: list[str] | None = None,
+    kind: str = "video",
+    fps: int = 24,
+    out_name: str | None = None,
+    start: int | None = None,
+    end: int | None = None,
+    crf: int | None = None,
+    scale: float | None = None,
+) -> ToolResult:
+    """Render several scenes in one call, reporting each scene's own result.
+
+    scenes defaults to every scene in the workspace. kind is frames, video or gif;
+    fps applies to video/gif, start/end (frames only) limit an inclusive range, and
+    crf/scale (video only) control the encode. Each output is named after its
+    scene, so one batch produces one deliverable per scene.
+
+    One scene failing does not stop the rest: every outcome is reported, so a long
+    batch is never lost to a single bad scene. The reply lists each scene as OK or
+    FAILED, and the structured payload carries the same per-scene detail.
+    """
+    ctx = get_context()
+    try:
+        ws = workspace_mod.require(ctx, workspace)
+        if kind not in ("frames", "video", "gif"):
+            raise RenderError(f"kind must be 'frames', 'video' or 'gif', got {kind!r}")
+        if (start is None) != (end is None):
+            raise RenderError("start and end must be given together, or not at all")
+        if start is not None and kind != "frames":
+            raise RenderError(f"start/end only apply to kind='frames', not {kind!r}")
+        if (crf is not None or scale is not None) and kind != "video":
+            raise RenderError(f"crf/scale only apply to kind='video', not {kind!r}")
+        available = [path.stem for path in ws.scenes()]
+        chosen = list(scenes) if scenes else available
+        if not chosen:
+            raise RenderError(f"workspace '{workspace}' has no scenes to render")
+        missing = [name for name in chosen if name not in available]
+        if missing:
+            raise RenderError(f"no such scene(s) in '{workspace}': {', '.join(missing)}")
+        if out_name is not None and len(chosen) > 1:
+            raise RenderError("out_name is ambiguous for several scenes; omit it to name each output after its scene")
+
+        items: list[models.BatchItem] = []
+        for name in chosen:
+            label = out_name or name
+            try:
+                if kind == "frames":
+                    result = render_mod.render_frames(
+                        ctx, workspace, name, out_name=label, frame_range=(start, end) if start is not None else None
+                    )
+                    output = str(result.frames[0].parent) if result.frames else None
+                elif kind == "video":
+                    path, result = render_mod.render_video(
+                        ctx, workspace, name, fps=fps, out_name=label, crf=crf, scale=scale
+                    )
+                    output = str(path)
+                else:
+                    path, result = render_mod.render_gif(ctx, workspace, name, fps=fps, out_name=label)
+                    output = str(path)
+            except OpentoonzMCPError as exc:
+                items.append(models.BatchItem(scene=name, ok=False, error=str(exc)))
+            else:
+                items.append(models.BatchItem(scene=name, ok=True, frames=len(result.frames), output=output))
+    except OpentoonzMCPError as exc:
+        return _structured(_fail(exc), error=True)
+
+    report = models.BatchReport(
+        workspace=workspace,
+        kind=kind,
+        rendered=sum(1 for item in items if item.ok),
+        failed=sum(1 for item in items if not item.ok),
+        items=items,
+    )
+    lines = [
+        f"{'OK' if item.ok else 'FAILED'} {item.scene}: "
+        + (f"{item.output} ({item.frames} frames)" if item.ok else (item.error or "failed"))
+        for item in items
+    ]
+    summary = f"Rendered {report.rendered}/{len(items)} {kind} in '{workspace}'\n" + "\n".join(lines)
+    return _structured(summary, report.model_dump())
 
 
 # -- escape hatch -------------------------------------------------------------

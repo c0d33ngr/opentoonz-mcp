@@ -306,6 +306,21 @@ for hand-drawn work), `max_width` downscales, and `colors` caps the palette
 `opentoonz_render_video` for anything with audio or that must stay full
 resolution.
 
+### `opentoonz_render_batch(workspace, scenes=None, kind="video", fps=24, out_name=None, start=None, end=None, crf=None, scale=None) -> str`
+Renders several scenes in one call. `scenes` defaults to every scene in the
+workspace, and each output is named after its scene, so one batch produces one
+deliverable per scene.
+
+- `kind` is `frames`, `video` or `gif`; `fps` applies to video/gif.
+- `start`/`end` (frames only) limit an inclusive range; `crf`/`scale` (video only)
+  control the encode. Passing them for the wrong kind is an error, not a silent
+  no-op.
+- `out_name` is only allowed for a single scene — with several it would collide.
+
+One scene failing does not stop the rest: every outcome is reported (each line is
+`OK` or `FAILED`), and the structured payload carries the same per-scene detail.
+A partial batch is a result, not an error.
+
 ## Escape hatch
 
 ### `opentoonz_run_script(workspace, code, timeout=90) -> str`

@@ -61,3 +61,23 @@ class RenderReport(BaseModel):
     height: int | None = None
     downscaled_from: str | None = None
     fps: int | None = None
+
+
+class BatchItem(BaseModel):
+    """One scene's outcome inside a batch render."""
+
+    scene: str
+    ok: bool
+    frames: int = 0
+    output: str | None = None
+    error: str | None = None
+
+
+class BatchReport(BaseModel):
+    """Rendering several scenes at once (``opentoonz_render_batch``)."""
+
+    workspace: str
+    kind: str
+    rendered: int = 0
+    failed: int = 0
+    items: list[BatchItem] = Field(default_factory=list)

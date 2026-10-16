@@ -26,6 +26,7 @@ EXPECTED_TOOLS = {
     "opentoonz_render",
     "opentoonz_render_video",
     "opentoonz_render_gif",
+    "opentoonz_render_batch",
     "opentoonz_clean",
     "opentoonz_delete_workspace",
     "opentoonz_run_script",
@@ -306,3 +307,93 @@ def test_opentoonz_clean_orphans_reports_what_it_removed(context, monkeypatch):
     assert not res.is_error
     assert res.structured_content["cleaned"] == ["unused.0001.png"]
     assert "1 orphaned drawings" in res.content[0].text
+
+
+# -- batch render (C4) ---------------------------------------------------------
+def _render_result(*frames):
+    from opentoonz_mcp import render as render_mod
+
+    return render_mod.RenderResult(ok=True, frames=list(frames), log="", exit_code=0, timed_out=False, duration=0.1)
+
+
+def _two_scenes(context, monkeypatch):
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    ws, _ = W.create(context, "w")
+    for name in ("a", "b"):
+        ws.scene_path(name).write_text("<scene/>", encoding="utf-8")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    return ws
+
+
+def test_opentoonz_render_batch_renders_every_scene(context, monkeypatch):
+    from opentoonz_mcp import render as render_mod
+
+    ws = _two_scenes(context, monkeypatch)
+
+    def fake_video(ctx, workspace, scene, fps=24, out_name="video", **kwargs):
+        path = ws.render / f"{out_name}.mp4"
+        path.write_bytes(b"v")
+        return path, _render_result(path)
+
+    monkeypatch.setattr(render_mod, "render_video", fake_video)
+    res = _call("opentoonz_render_batch", workspace="w")
+    assert not res.is_error
+    assert res.structured_content["rendered"] == 2
+    assert [item["scene"] for item in res.structured_content["items"]] == ["a", "b"]
+
+
+def test_opentoonz_render_batch_keeps_going_after_a_failure(context, monkeypatch):
+    from opentoonz_mcp import render as render_mod
+    from opentoonz_mcp.errors import RenderError
+
+    ws = _two_scenes(context, monkeypatch)
+    ran = []
+
+    def fake_video(ctx, workspace, scene, fps=24, out_name="video", **kwargs):
+        ran.append(scene)
+        if scene == "a":
+            raise RenderError("boom")
+        path = ws.render / f"{out_name}.mp4"
+        path.write_bytes(b"v")
+        return path, _render_result(path)
+
+    monkeypatch.setattr(render_mod, "render_video", fake_video)
+    res = _call("opentoonz_render_batch", workspace="w")
+    assert not res.is_error  # a partial batch is a result, not an error
+    assert res.structured_content["rendered"] == 1
+    assert res.structured_content["failed"] == 1
+    assert ran == ["a", "b"]  # the second scene still ran
+
+
+def test_opentoonz_render_batch_rejects_an_ambiguous_out_name(context, monkeypatch):
+    _two_scenes(context, monkeypatch)
+    res = _call("opentoonz_render_batch", workspace="w", out_name="clip")
+    assert res.is_error and "ambiguous" in res.content[0].text
+
+
+def test_opentoonz_render_batch_needs_scenes(context, monkeypatch):
+    from opentoonz_mcp import server
+    from opentoonz_mcp import workspace as W
+
+    W.create(context, "w")
+    monkeypatch.setattr(server, "get_context", lambda: context)
+    res = _call("opentoonz_render_batch", workspace="w")
+    assert res.is_error and "no scenes" in res.content[0].text
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"kind": "nope"}, "kind"),
+        ({"kind": "video", "start": 1, "end": 2}, "start/end"),
+        ({"kind": "frames", "start": 1}, "together"),
+        ({"kind": "gif", "crf": 20}, "crf/scale"),
+        ({"scenes": ["ghost"]}, "no such scene"),
+    ],
+)
+def test_opentoonz_render_batch_validates(context, monkeypatch, kwargs, message):
+    _two_scenes(context, monkeypatch)
+    res = _call("opentoonz_render_batch", workspace="w", **kwargs)
+    assert res.is_error and message in res.content[0].text

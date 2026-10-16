@@ -550,3 +550,23 @@ def test_doctor_smoke_runs_a_real_script(live_context, monkeypatch):
     monkeypatch.setattr(server, "get_context", lambda: live_context)
     out = server.opentoonz_doctor(smoke=True)
     assert "smoke        : OK" in out
+
+
+def test_render_batch_renders_every_scene(live_context, monkeypatch):
+    """A batch renders each scene to its own file and reports per scene."""
+    from pathlib import Path
+
+    from opentoonz_mcp import server
+
+    ctx = live_context
+    ws, _ = W.create(ctx, "batch")
+    for name in ("one", "two"):
+        scenes.scene_new(ctx, "batch", name, width=160, height=90)
+        scenes.import_level(ctx, "batch", name, _draw_ball(ws, name=name, n=2, size=(160, 90)), name)
+
+    monkeypatch.setattr(server, "get_context", lambda: ctx)
+    result = server.opentoonz_render_batch("batch", kind="video", fps=8)
+    assert result.structured_content["rendered"] == 2
+    assert result.structured_content["failed"] == 0
+    for item in result.structured_content["items"]:
+        assert Path(item["output"]).is_file()

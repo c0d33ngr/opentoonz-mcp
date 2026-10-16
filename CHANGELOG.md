@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`opentoonz_render_batch`** — renders several scenes in one call (frames, video
+  or gif), naming each output after its scene and reporting every scene's result.
+  One scene failing does not stop the rest, so a long batch is never lost to a
+  single bad scene.
 - **`opentoonz_clean(what="orphans")`** — removes drawings that no scene in the
   workspace references, which is what accumulates when a level is re-imported
   under a new name or a sequence is drawn but never used. Conservative by design:
